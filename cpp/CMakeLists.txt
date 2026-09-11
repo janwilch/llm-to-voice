@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(llmvoice_cpp C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # CMake Tools reads this to drive IntelliSense in cpptools (see
@@ -10,6 +10,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Git REQUIRED)
 find_package(Threads REQUIRED)
+
+# --- Standard dependencies ----------------------------------------------------
+include(FetchContent)
+FetchContent_Declare(
+    CLI11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11
+    GIT_TAG v2.7.2
+)
+
+FetchContent_MakeAvailable(CLI11)
 
 # --- One ggml for the whole process -------------------------------------------
 #
@@ -70,8 +80,6 @@ endif()
 # FetchContent_MakeAvailable download and pin the source without calling
 # add_subdirectory on it. The order of the add_subdirectory calls below is the
 # whole fix, so it is done by hand.
-include(FetchContent)
-
 FetchContent_Declare(
   llama_cpp
   GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
@@ -138,6 +146,7 @@ target_link_libraries(qwen-core PUBLIC ggml Threads::Threads)
 # --- Our targets --------------------------------------------------------------
 
 add_executable(llmvoice_cpp src/main.cpp)
+target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11)
 
 enable_testing()
 
