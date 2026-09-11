@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Editor
+.idea/
+
+# Project
+models/
+out/
+*.wav
+!tests/fixtures/*.wav
