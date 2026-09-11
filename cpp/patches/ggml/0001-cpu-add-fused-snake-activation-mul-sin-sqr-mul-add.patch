@@ -1,0 +1,160 @@
+From 06361b9d64a251d4d7150048c30e077264f7ce89 Mon Sep 17 00:00:00 2001
+From: Pascal <admin@serveurperso.com>
+Date: Fri, 19 Jun 2026 13:43:01 +0000
+Subject: [PATCH 1/2] cpu: add fused snake activation (mul -> sin -> sqr -> mul
+ -> add)
+
+Detect the naive 5-op chain in ggml_cpu_try_fuse_ops and route it to a
+single forward computing y = x + sin(a*x)^2 * inv_b, mirroring the
+CUDA, Vulkan and Metal fusion. x and dst template over f32/f16/bf16
+with f32 compute, split over channels; a and inv_b are F32.
+
+Validated against the unfused reference: max abs error 1.2e-7 (f32
+epsilon), cosine 1.0.
+---
+ src/ggml-cpu/ggml-cpu.c | 47 ++++++++++++++++++++++++++++++++++++
+ src/ggml-cpu/ops.cpp    | 53 +++++++++++++++++++++++++++++++++++++++++
+ src/ggml-cpu/ops.h      |  5 ++++
+ 3 files changed, 105 insertions(+)
+
+diff --git a/src/ggml-cpu/ggml-cpu.c b/src/ggml-cpu/ggml-cpu.c
+index 87a329f2..f2def0bf 100644
+--- a/src/ggml-cpu/ggml-cpu.c
++++ b/src/ggml-cpu/ggml-cpu.c
+@@ -3095,6 +3095,53 @@ static int ggml_cpu_try_fuse_ops(
+         }
+     }
+ 
++    if (node->op == GGML_OP_MUL) {
++        // Snake activation autofuse: mul -> sin -> sqr -> mul -> add
++        const enum ggml_op snake_ops[] = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
++        if (ggml_can_fuse(cgraph, node_n, snake_ops, 5)) {
++            const struct ggml_tensor * mul0     = cgraph->nodes[node_n + 0];
++            const struct ggml_tensor * sin_node = cgraph->nodes[node_n + 1];
++            const struct ggml_tensor * sqr      = cgraph->nodes[node_n + 2];
++            const struct ggml_tensor * mul1     = cgraph->nodes[node_n + 3];
++            struct ggml_tensor *       add      = cgraph->nodes[node_n + 4];
++
++            // x carries the full activation shape, a is the broadcast operand
++            const struct ggml_tensor * x = ggml_are_same_shape(mul0, mul0->src[0]) ? mul0->src[0] : mul0->src[1];
++            const struct ggml_tensor * a = (x == mul0->src[0]) ? mul0->src[1] : mul0->src[0];
++
++            // mul1 reads sqr and inv_b in either operand order
++            const struct ggml_tensor * inv_b    = (mul1->src[0] == sqr) ? mul1->src[1] : mul1->src[0];
++
++            // closure check: the trailing add reads the same x as the leading mul
++            const struct ggml_tensor * x_in_add = (add->src[0] == mul1) ? add->src[1] : add->src[0];
++
++            // x is in the supported whitelist and every chain intermediate shares x's type.
++            // The impl reads a and inv_b as const float *, so they stay F32.
++            const bool types_ok =
++                (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
++                a->type == GGML_TYPE_F32 && inv_b->type == GGML_TYPE_F32 &&
++                mul0->type == x->type && sin_node->type == x->type &&
++                sqr->type  == x->type && mul1->type     == x->type &&
++                add->type  == x->type;
++            const bool shape_ok = ggml_are_same_shape(a, inv_b) && a->ne[0] == 1 && a->ne[1] == x->ne[1];
++            // inner loop walks t over T at fixed c, so x and add stay 2D and a / inv_b collapse to [1, C, 1, 1]
++            const bool dim_ok =
++                x->ne[2] == 1 && x->ne[3] == 1 &&
++                add->ne[2] == 1 && add->ne[3] == 1 &&
++                a->ne[2] == 1 && a->ne[3] == 1 &&
++                inv_b->ne[2] == 1 && inv_b->ne[3] == 1;
++            // impl indexes xd + c * T and ad[c] / bd[c] without strides, so every operand is contiguous
++            const bool contig_ok =
++                ggml_is_contiguous(x) && ggml_is_contiguous(add) &&
++                ggml_is_contiguous(a) && ggml_is_contiguous(inv_b);
++
++            if (types_ok && shape_ok && dim_ok && contig_ok && x_in_add == x) {
++                ggml_compute_forward_snake_fused(params, x, a, inv_b, add);
++                return 4;
++            }
++        }
++    }
++
+     return 0;
+ }
+ 
+diff --git a/src/ggml-cpu/ops.cpp b/src/ggml-cpu/ops.cpp
+index 266261c5..99d6fb10 100644
+--- a/src/ggml-cpu/ops.cpp
++++ b/src/ggml-cpu/ops.cpp
+@@ -7006,6 +7006,59 @@ static inline int64_t ggml_wrap_around(int64_t coord, int64_t size) {
+     return (coord  + size) % size; // adding size avoids negative number weirdness
+ }
+ 
++// ggml_compute_forward_snake_fused
++// Fused snake activation: y = x + sin^2(a * x) * inv_b.
++// x is [T, C] (T contiguous), a / inv_b collapse to [1, C].
++// Operands are extracted by the fusion path from the naive
++// mul -> sin -> sqr -> mul -> add chain. x and dst share one of
++// {f32, f16, bf16}; a and inv_b are F32, compute is F32.
++
++template <typename elem_t>
++static void ggml_compute_forward_snake_fused_impl(
++        const struct ggml_compute_params * params,
++        const struct ggml_tensor * x,
++        const struct ggml_tensor * a,
++        const struct ggml_tensor * inv_b,
++        struct ggml_tensor * dst) {
++    const int64_t T = x->ne[0];
++    const int64_t C = x->ne[1];
++
++    const elem_t * xd = (const elem_t *) x->data;
++    const float  * ad = (const float  *) a->data;
++    const float  * bd = (const float  *) inv_b->data;
++    elem_t       * yd = (elem_t       *) dst->data;
++
++    const int ith = params->ith;
++    const int nth = params->nth;
++
++    // Split over channels: each thread owns disjoint [c * T, (c + 1) * T) bands
++    for (int64_t c = ith; c < C; c += nth) {
++        const float ac = ad[c];
++        const float bc = bd[c];
++        const elem_t * xc = xd + c * T;
++        elem_t       * yc = yd + c * T;
++        for (int64_t t = 0; t < T; t++) {
++            const float xi = type_conversion_table<elem_t>::to_f32(xc[t]);
++            const float si = sinf(ac * xi);
++            yc[t] = type_conversion_table<elem_t>::from_f32(xi + si * si * bc);
++        }
++    }
++}
++
++void ggml_compute_forward_snake_fused(
++        const struct ggml_compute_params * params,
++        const struct ggml_tensor * x,
++        const struct ggml_tensor * a,
++        const struct ggml_tensor * inv_b,
++        struct ggml_tensor * dst) {
++    switch (x->type) {
++        case GGML_TYPE_F32:  ggml_compute_forward_snake_fused_impl<float>      (params, x, a, inv_b, dst); break;
++        case GGML_TYPE_F16:  ggml_compute_forward_snake_fused_impl<ggml_fp16_t>(params, x, a, inv_b, dst); break;
++        case GGML_TYPE_BF16: ggml_compute_forward_snake_fused_impl<ggml_bf16_t>(params, x, a, inv_b, dst); break;
++        default: GGML_ABORT("snake: unsupported type %d", x->type);
++    }
++}
++
+ // ggml_compute_forward_col2im_1d
+ //
+ // Scatter-add columns [K*OC, T_in] -> signal [T_out, OC]
+diff --git a/src/ggml-cpu/ops.h b/src/ggml-cpu/ops.h
+index 4c1642a6..ac15a716 100644
+--- a/src/ggml-cpu/ops.h
++++ b/src/ggml-cpu/ops.h
+@@ -69,6 +69,11 @@ void ggml_compute_forward_im2col(const struct ggml_compute_params * params, stru
+ void ggml_compute_forward_im2col_back_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_im2col_3d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_col2im_1d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
++void ggml_compute_forward_snake_fused(const struct ggml_compute_params * params,
++                                      const struct ggml_tensor * x,
++                                      const struct ggml_tensor * a,
++                                      const struct ggml_tensor * inv_b,
++                                      struct ggml_tensor * dst);
+ void ggml_compute_forward_conv_2d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_conv_3d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+ void ggml_compute_forward_conv_transpose_2d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+-- 
+2.55.0
+
