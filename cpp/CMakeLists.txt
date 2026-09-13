@@ -20,6 +20,7 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(CLI11)
+FetchContent_MakeAvailable(CLI11)
 
 # --- One ggml for the whole process -------------------------------------------
 #
@@ -145,8 +146,14 @@ target_link_libraries(qwen-core PUBLIC ggml Threads::Threads)
 
 # --- Our targets --------------------------------------------------------------
 
-add_executable(llmvoice_cpp src/main.cpp)
-target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11)
+add_executable(llmvoice_cpp src/main.cpp
+  src/tts/Qwen3TtsBackend.cpp)
+target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 qwen-core)
+
+target_compile_definitions(
+    llmvoice_cpp PRIVATE
+    QWEN_DEFAULT_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../models"
+)
 
 enable_testing()
 

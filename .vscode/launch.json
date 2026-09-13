@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug llmvoice_cpp",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [
+                "-p", "Hello my friend",
+                "--tts-backend", "qwen3-tts",
+                "--voice", "A happily excized middle-aged man"
+            ],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "MIMode": "gdb",
+            "externalConsole": false
+        }
+    ]
+}

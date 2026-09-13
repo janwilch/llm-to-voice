@@ -1,0 +1,81 @@
+#pragma once
+
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <optional>
+
+/// @brief Thread-safe blocking queue wrapper.
+/// @tparam T 
+template <typename T>
+class BlockingQueue {
+private:
+    std::deque<T> _items;
+    size_t _capacity;
+    std::mutex _mutex;
+    std::condition_variable _notEmpty;
+    std::condition_variable _notFull;
+    bool _closed = false;
+
+public:
+    explicit BlockingQueue(size_t capacity) : _capacity(capacity) {}
+
+    /// @brief Add to queue, if not full or closed.
+    /// @param item 
+    /// @return `false` if the queue is closed.
+    bool push(T item) {
+        std::unique_lock lock(_mutex);
+        
+        // equivalent to: `while(!predicate) wait(lock);`
+        // while waiting, *other threads can acquire the _mutex*
+        _notFull.wait(
+            lock,
+            [&] { return _items.size() < _capacity || _closed; }
+        );
+
+        if (_closed) {
+            return false;
+        }
+
+        // std::move *moves* the item memory position into the queue, without creating another copy
+        // after this, the `item` variable is unspecified
+        _items.push_back(std::move(item));
+
+        lock.unlock();
+        _notEmpty.notify_one();
+        return true;
+    }
+
+    /// @brief Remove from queue if not empty or closed.
+    /// @return 
+    std::optional<T> pop() {
+        std::unique_lock lock(_mutex);
+
+        _notEmpty.wait(
+            lock,
+            [&] { return !_items.empty() || _closed; }
+        );
+
+        if (_items.empty()) {
+            return std::nullopt;
+        }
+
+        T item = std::move(_items.front());
+        _items.pop_front();
+
+        lock.unlock();
+        _notFull.notify_one();
+        return item;
+    }
+
+    /// @brief Close the queue, unlocking all waiting threads.
+    void close() {
+        {
+            std::lock_guard lock(_mutex);
+            _closed = true;
+        }
+
+        _notEmpty.notify_all();
+        _notFull.notify_all();
+    }
+};
