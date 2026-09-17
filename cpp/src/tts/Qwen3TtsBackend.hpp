@@ -4,4 +4,4 @@
 #include <memory>
 #include <string>
 
-std::unique_ptr<ITtsBackend> createQwen3TtsBackend(std::string talkerPath, std::string codecPath);
+std::unique_ptr<ITtsBackend> createQwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath);

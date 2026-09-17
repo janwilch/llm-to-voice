@@ -10,6 +10,9 @@ enum class TtsBackendType {
 
 inline std::string to_string(TtsBackendType backend) {
     switch (backend) {
+        case TtsBackendType::None:
+            return "none";
+        
         case TtsBackendType::Qwen3Tts:
             return "qwen3_tts";
         
@@ -19,10 +22,3 @@ inline std::string to_string(TtsBackendType backend) {
 
     return "unknown";
 }
-
-template <>
-struct std::formatter<TtsBackendType> : std::formatter<std::string> {
-    auto format(TtsBackendType backend, auto& ctx) const {
-        return std::formatter<std::string>::format(to_string(backend), ctx);
-    }
-};

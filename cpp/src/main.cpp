@@ -2,7 +2,10 @@
 #include <print>
 #include <thread>
 
+#include "helpers/EnumToString.hpp"
+
 #include "threading/BlockingQueue.hpp"
+
 #include "tts/ITtsBackend.hpp"
 #include "tts/Qwen3TtsBackend.hpp"
 #include "tts/TtsBackendType.hpp"
@@ -44,7 +47,7 @@ int main(int argc, char** argv) {
     BlockingQueue<std::vector<float>> queue(queueCapacity);
 
     std::jthread producer([&backend, &prompt, &voice, &queue] {
-        backend->synthesize_to_queue(prompt, voice, queue, -1);
+        backend->synthesizeToQueue(prompt, voice, queue, -1);
     });
 
     int chunkNo = 0;

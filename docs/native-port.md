@@ -1,22 +1,8 @@
 # Porting to a native DLL for Unity
 
-The Python prototype in `py/` is disposable. This document records the
-constraints it was built under so the port into `cpp/` is a translation rather
-than a redesign, and records the two alternatives that were rejected so they are
-not re-litigated.
+The Python prototype in `py/` is disposable and stays as a voice-auditioning harness. The compute lives in two native runtimes: llama.cpp (LLM) and qwentts.cpp (TTS, itself llama.cpp + a codec). Everything in `cpp/` is orchestration around them, exposed to Unity as a single C ABI.
 
-## The shape of the problem
-
-`py/` is ~2,100 lines, and almost none of it is compute. The compute already
-lives in two native C/C++ runtimes: llama.cpp behind `py/src/llmvoice/llm/llama_server.py`,
-and PyTorch's CUDA kernels behind `py/src/llmvoice/tts/qwen3_torch.py`. Everything
-written here is orchestration — a `<think>` stripper, a segmenter, a coalescer, a
-ring buffer, an underrun rule.
-
-## Why Qwen3-TTS makes this possible
-
-The Qwen3-TTS backbone *is* a Qwen3 LLM, so it runs on ggml. That means the LLM
-and the TTS model can share one inference runtime, and neither needs Python:
+## Architecture
 
 | Component | Native form |
 |---|---|
@@ -25,235 +11,87 @@ and the TTS model can share one inference runtime, and neither needs Python:
 | TTS MTP code predictor (142M) | GGUF via llama.cpp |
 | Speech encoder / code2wav decoder | fp16 ONNX via onnxruntime, or ggml |
 
-Both llama.cpp and onnxruntime are plain C libraries with Windows builds, which
-is the entire reason this model was chosen over better-sounding alternatives.
-
-### Reference implementations
-
-- **[ServeurpersoCom/qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp)
-  — the target.** A C++17 port of Qwen3-TTS on GGML, MIT over the Apache-2.0
-  model. It closes what used to be the open gap in this document:
-  - **VoiceDesign** from a free-text attribute instruct string — our style
-    channel, not just Base voice cloning.
-  - **Streaming**, described as stateful frame-by-frame codec decode where the
-    first audio callback fires one frame after the first Talker step, and the
-    streamed output matches the offline full decode exactly.
-  - **A plain C header** (`qwen.h`, single prefix, C linkage) written for
-    ctypes / bindgen / cgo consumers, plus `-DQWEN_SHARED=ON` for a real `.dll`.
-  - CPU / CUDA / Vulkan / ROCm / Metal, with Windows CUDA and Vulkan build
-    scripts.
-
-  Caveat, and it is the main risk in this plan: it is young and effectively
-  single-maintainer (~159 stars, ~133 commits as of Sept 2026). Vendor it at a
-  pinned commit. A frozen C++17 + GGML tree is *genuinely* stable in a way the
-  frozen torch / transformers / qwen-tts-hf combination in `py/pyproject.toml`
-  is not, and that asymmetry is most of the argument for porting at all.
-
-- **[HaujetZhao/Qwen3-TTS-GGUF](https://github.com/HaujetZhao/Qwen3-TTS-GGUF)** —
-  the same split (llama.cpp for talker/predictor, onnxruntime for
-  encoder/decoder) with a Python `TTSEngine` on top. Supports VoiceDesign and
-  reports **~1.8 GB VRAM at RTF 0.35 on an RTX 5050**, ~300 ms first packet.
-  Useful as a cross-check on qwentts.cpp's numbers and as a fallback split.
-
-- **[ggml-org/llama.cpp PR #26254](https://github.com/ggml-org/llama.cpp/pull/26254)**
-  — merged to master Aug 2026. Brings Qwen3-TTS into mainline with a
-  `llama-tts` binary and a follow-up `POST /tts` server endpoint, but **Base
-  only**: voice cloning from a reference clip, no VoiceDesign, no instruct
-  channel. So mainline is the fallback for the *LLM* half, not the TTS half.
-  Worth re-checking before Stage 2 — if VoiceDesign lands upstream, the
-  single-maintainer risk above disappears.
-
-### Prior art for the Unity shape
-
-[UndreamAI's LLMUnity](https://github.com/undreamai/LLMUnity) ships llama.cpp
-into Unity as a standalone C++/C# library (`LlamaLib`) and has shipped in
-commercial titles — *Verbal Verdict*, *Case Closed* — on Unity 2021 LTS through
-Unity 6, across Nvidia / AMD / Metal. The pattern is proven. We are doing the
-same thing with a second model attached.
+TTS is provided by [ServeurpersoCom/qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp), vendored at a pinned commit (`cpp/bin/_deps/qwentts_cpp-src`). It supports VoiceDesign (free-text style instruct, not just voice cloning) and streaming via a frame-ramping `on_chunk` callback. Re-check [llama.cpp PR #26254](https://github.com/ggml-org/llama.cpp/pull/26254) (mainline Qwen3-TTS, Base-only today) periodically — if VoiceDesign lands there, qwentts.cpp's single-maintainer dependency can be dropped.
 
 ## The C ABI
 
 ```c
 typedef struct llmvoice_handle llmvoice_handle;
 
-llmvoice_handle* llmvoice_create (const llmvoice_config* cfg);
+typedef struct {
+    const char* llm_model_path;
+    const char* tts_talker_path;
+    const char* tts_codec_path;
+    int         sample_rate_hint;   // 0 = native 24000
+} llmvoice_config;
+
+llmvoice_handle* llmvoice_create   (const llmvoice_config* cfg);
+void              llmvoice_warmup   (llmvoice_handle*);
+void              llmvoice_destroy  (llmvoice_handle*);
+
 void  llmvoice_set_style (llmvoice_handle*, const char* persona_utf8,
-                                            const char* delivery_utf8);
+                                             const char* delivery_utf8);
 void  llmvoice_submit    (llmvoice_handle*, const char* prompt_utf8);
-int   llmvoice_poll_pcm  (llmvoice_handle*, float* dst, int max_frames);
 void  llmvoice_cancel    (llmvoice_handle*);
-void  llmvoice_destroy   (llmvoice_handle*);
+
+int   llmvoice_poll_text (llmvoice_handle*, char* dst_utf8, int max_bytes);
+int   llmvoice_poll_pcm  (llmvoice_handle*, float* dst, int max_frames);
+int   llmvoice_is_done   (llmvoice_handle*);
 ```
 
-### `poll_pcm` is a pull, and that is deliberate
+Both `poll_*` calls drain whatever is ready since the last call and zero-pad/truncate as needed; they never block and never call back into the caller. No delegates cross the boundary in either direction — a callback into managed code cannot be marshaled reliably under IL2CPP, so this API stays pull-only even though the native side is callback-driven internally. `poll_pcm` is called from Unity's audio thread (`OnAudioFilterRead` or a `PCMReaderCallback` `AudioClip`); `poll_text` is called from `Update()`.
 
-Unity drains it from `OnAudioFilterRead` or a `PCMReaderCallback` `AudioClip`.
-There is no callback from native code into managed code anywhere in this API.
+Model loading happens exactly once, in `llmvoice_create` — the GGUF weights, codec and tokenizer are loaded into `qt_context`/the llama.cpp context and stay resident for the handle's entire lifetime, across as many `submit` calls as the game session needs. This isn't new: `Qwen3TtsBackend` already works this way — `qt_init` runs once in its constructor and every `synthesizeToQueue` call reuses the same `_context`. `llmvoice_warmup` exposes the existing `ITtsBackend::warmup()` (and, once added, an equivalent on the LLM backend) through the ABI: it runs one throwaway generation through the already-loaded context to prime GPU kernels and allocators, so the *first real* `submit` isn't the one that eats the cold-start latency. Call it once, right after `create`, before the player's first prompt — not before every `submit`.
 
-That is not a style preference, and it is now confirmed rather than assumed. The
-sherpa-onnx Unity plugins document that their chunk-callback API wraps the user
-callback in a closure / instance-method delegate that **IL2CPP cannot marshal**,
-so on IL2CPP builds they auto-fall-back to the callback-less non-streaming
-`Generate` — which would defeat the entire purpose of this project. A pull-based
-boundary cannot inherit that bug. Keep it pull-based even if it looks awkward
-from C++.
+`llmvoice_handle` is intentionally an opaque type: the public header only forward-declares `struct llmvoice_handle;` and never defines it, so callers (Unity included) hold nothing but a pointer they pass back into every call — they can't see or touch its contents, which is what lets the real definition be arbitrary C++ on the other side of the ABI. The actual struct is defined only in the `.cpp` that implements these functions, roughly:
 
-## What the prototype already got right
+```cpp
+// llmvoice.cpp — the real definition; nothing outside this file ever sees it
+struct llmvoice_handle {
+    std::unique_ptr<ITtsBackend> tts;
+    std::unique_ptr<ILlmBackend> llm;
+    std::jthread                 worker;
+    ma_rb                        pcm_ring;    // lock-free, read from the audio thread
+    std::mutex                   text_mutex;  // fine here — read from Update(), not real-time
+    std::string                  text_buffer;
+};
 
-Each of these exists to make the port mechanical:
+llmvoice_handle* llmvoice_create(const llmvoice_config* cfg) {
+    auto* h = new llmvoice_handle{ /* construct tts/llm backends from cfg, start worker */ };
+    return h;
+}
+```
 
-- **Stage boundaries carry only UTF-8 bytes or PCM frames.** No Python objects
-  cross a queue, so every queue becomes a lock-free ring buffer.
-- **Bounded queues everywhere.** Memory is flat under load and backpressure
-  reaches the token source. A native port with unbounded queues would drift.
-- **`TtsBackend` / `LlmBackend` protocols.** The pipeline never learns which
-  backend it is driving, so a ggml backend can replace `qwen3_torch` underneath
-  it — add it as a third branch in `py/src/llmvoice/tts/backend.py:build_backend`.
-  This is what makes Stage 1 below cheap.
-- **Flat scalar config.** `AppConfig` is a tree of scalar dataclasses precisely
-  so it can become `llmvoice_config` without inventing a serialisation format.
-- **`cancel()` on every stage.** Barge-in is a hard requirement in a game, and
-  retrofitting cancellation into a threaded pipeline is painful.
-- **`UnderrunTracker`.** A pure function of (frames requested, frames available,
-  producing?, playing?). Port it verbatim; the two edge cases it encodes were
-  both bugs at some point.
+This is the standard "opaque pointer" pattern (also called PImpl) for wrapping C++ in a C ABI: it lets `llmvoice.h` stay pure C with no exposed C++ types, while the implementation is free to use `std::jthread`, `std::unique_ptr`, templates, exceptions internally — none of that crosses the boundary, only the pointer does.
 
-## What will need rethinking
+## Internal design
 
-- **`RingBuffer.read_into` does *not* port verbatim** — this document used to say
-  it did, and that was wrong. `py/src/llmvoice/audio/sink.py` acquires a mutex and
-  calls `notify_all()` on the read side. That is fine on a PortAudio callback in
-  a CLI. On Unity's audio thread, a blocking mutex acquire plus a condvar signal
-  is a priority-inversion hazard that will manufacture exactly the underruns the
-  tracker exists to detect. In C++ it becomes an SPSC ring with atomic read/write
-  indices and no mutex on the consumer side. The *semantics* port as-is: fill a
-  caller-owned buffer, return the frame count, zero-pad the remainder — that is
-  `llmvoice_poll_pcm`.
-- **Sample rate.** The model emits 24 kHz mono; a Unity mixer typically runs at
-  48 kHz. Either set the project's `AudioSettings` output rate to 24 kHz, which
-  affects every other sound in the game, or resample in the native layer. Decide
-  this early — it changes which side of the ring buffer the resampler sits on.
-- **GPU contention is the unsolved problem, and it is unsolved in all three
-  options.** ggml's kernel queue knows nothing about a 16.6 ms frame budget, so
-  long TTS decodes will cause frame hitches, and there is no clean fix on
-  consumer Windows. The levers are coarse: cap `n_gpu_layers`, move the LLM to
-  CPU when the GPU is contended, or gate speech to moments where a hitch is
-  cheap. Measure frame-time percentiles at Stage 1, not at Stage 4.
-- **Threading.** The prototype uses three OS threads and blocking queues. In a
-  game, prefer the engine's job system or a single dedicated worker thread with
-  lock-free SPSC queues; blocking a Unity thread is not acceptable.
-- **The segmenter.** `stream2sentence` is Python. Its *logic* must be
-  reimplemented in C++ — the parameters worth keeping are a minimum sentence
-  length, the never-split-numbers guard, and the segment coalescer. Quick-yield
-  of the first fragment is the classic TTFA lever and is deliberately **off**:
-  each segment is a separate VoiceDesign generation that re-samples the speaker,
-  and a clause-length opener has so little context that it comes out as a
-  different person before the voice settles. Port the coalescer with it, or the
-  port will sound worse than the prototype for a latency win nobody asked for.
-  See `py/src/llmvoice/segmentation.py` for the tuned values and
-  `py/tests/test_segmentation.py` for the behaviour to preserve.
-- **`textprep`.** Straight port, and small: it strips `<think>` blocks and
-  nothing else. A pure state machine with a bounded holdback, so a partial
-  `<think>` split across two deltas is never emitted. `py/tests/test_textprep.py`
-  pins that behaviour.
-- **Model loading time.** Loading two GGUF models plus the codec is slow enough
-  to need a loading screen or a background warmup.
-- **VRAM sharing.** The game itself wants VRAM. The ggml path's ~1.8 GB for TTS
-  is what makes this viable at all; budget for the renderer too, and consider
-  keeping the LLM on CPU if the GPU is contended.
+- **qwentts's `on_chunk` → `BlockingQueue<std::vector<float>>` → llmvoice worker thread.** This is already how `Qwen3TtsBackend::synthesizeToQueue` works and stays as-is: qwentts's callback fires on its own internal compute thread and must not block, so it just pushes into the bounded queue. The same pattern applies to LLM text deltas once that backend exists — `BlockingQueue<std::string>` (or a small delta+metadata struct) from the llama.cpp callback thread into the same llmvoice worker.
+- **Chunk accumulation happens behind the ABI, not in Unity.** The llmvoice worker thread drains both `BlockingQueue`s and writes into a ring buffer that `poll_pcm`/`poll_text` read from. qwentts's audio chunks are irregular by design (first chunk is one 12.5 Hz frame, then doubles up to 8 frames as the stream settles), so normalizing them into a flat, poll-able buffer is native-library responsibility. Unity only ever sees fixed-size pulls; a native CLI test harness consumes the identical, already-normalized stream instead of re-deriving qwentts's framing.
+- **Only the PCM ring needs to be lock-free.** `poll_pcm` is called from Unity's real-time audio thread, so that ring must be a true SPSC structure with no mutex on the read side. `poll_text` is called from `Update()` on Unity's main thread, which has no real-time constraint — a plain mutex-guarded buffer (the same style `BlockingQueue` already uses elsewhere in this codebase) is simpler and sufficient there; don't build a second lock-free ring for text.
+- **Take the PCM ring from a library, don't hand-roll the atomics.** Vendor one via `FetchContent`, the same pattern already used for CLI11/llama.cpp/qwentts.cpp. miniaudio's `ma_rb` is the best fit: single header, MIT, and its acquire/commit contract (reserve a write region, commit what was actually written, same for reads) maps directly onto `poll_pcm`'s "fill up to N frames, return how many, zero-pad the rest" contract — closer to what's needed than a generic per-item lock-free queue (e.g. rigtorp/SPSCQueue, moodycamel::ReaderWriterQueue), which would still need a wrapper to turn "pop one item" into "fill this buffer." It also doubles as the CLI's playback backend (§ below), so it's one dependency serving both jobs.
+- **`RingBuffer.read_into`'s semantics port, its locking does not.** Keep "fill a caller-owned buffer, return the frame count, zero-pad the remainder" from `py/src/llmvoice/audio/sink.py`; drop the mutex + `notify_all()` — a blocking acquire on Unity's audio thread is a priority-inversion hazard.
+- **`UnderrunTracker` ports verbatim.** Pure function of (frames requested, frames available, producing?, playing?); reuse the bracket-and-count logic as-is so pre-roll silence and end-of-stream tail aren't miscounted as dropouts.
 
-## The order of work
+## The CLI as the ABI's test and voice-design harness
 
-The staging matters more than the destination, because each stage de-risks the
-next and none of it is throwaway.
+`cpp/src/main.cpp` currently talks to `ITtsBackend`/`BlockingQueue` directly. Once the ABI exists, migrate it to be a client of `llmvoice_*` instead — this makes the CLI a real integration test of the exact path Unity uses, and keeps it as the voice-audition tool:
 
-**Stage 1 — swap the TTS backend, stay in Python.** `faster-qwen3-tts` ships an
-experimental adapter for the qwentts.cpp runtime (`qwentts-cpp-python`; GGML is
-opt-in, Torch/CUDA-graph stays the default). Add it as a third branch in
-`tts/backend.py:build_backend`, which is what that indirection was for. Then
-measure ggml VoiceDesign quality, TTFA, RTF and VRAM with `py/bench/latency.py`
-against the existing acceptance targets — **before writing a line of C++ or
-opening Unity.**
+- `llmvoice_create` from the existing `--tts-backend`/model-path flags, followed by one `llmvoice_warmup` call before the poll loop — the CLI should pay the same warmup cost Unity will pay once per session, not once per prompt.
+- `llmvoice_set_style` from a new `--persona`/`--delivery` flag pair, for auditioning VoiceDesign prompts without opening Unity.
+- `llmvoice_submit(prompt)` in place of the direct `synthesizeToQueue` call.
+- A poll loop replacing today's `queue.pop()` loop: call `llmvoice_poll_pcm` and `llmvoice_poll_text` on an interval, print text deltas as they arrive (as today), and either play the PCM (via miniaudio, already vendored for the ring buffer above) or accumulate it purely for the CLI's own purposes (e.g. write a WAV for review) — the ABI itself stays streaming-only, only the CLI-side consumer buffers to disk.
+- Loop until `llmvoice_is_done`, then `llmvoice_destroy`.
 
-This stage is the gate. If ggml VoiceDesign does not hold the speaker identity
-across segments, we find out here for the price of one backend class, and
-Fun-CosyVoice3-0.5B (plan B in the README) is still on the table. Everything
-after this point assumes Stage 1 passed.
+## Remaining steps
 
-**Stage 2 — port the glue into `cpp/` behind the C ABI above.** Link `libqwen`
-and `libllama`. It is roughly 300 lines of real logic: textprep, the segmenter,
-the coalescer, the ring buffer, the underrun rule. Port the *test vectors* from
-`py/tests/` first and make the C++ pass them — those tests are the specification,
-and several of them encode bugs that were fixed once already.
-
-**Stage 3 — thin C# P/Invoke wrapper plus `OnAudioFilterRead`.** Blittable types
-only. No delegates cross the boundary, for the IL2CPP reason above.
-
-**Stage 4 — keep the Python CLI.** It is the voice-auditioning and tuning
-harness, and it stays useful for the rest of the project's life. That is why
-`py/` is a peer of `cpp/` rather than something the port deletes.
-
-## Rejected: ship the Python prototype as a sidecar
-
-Run `py/` under uv in the background and stream to Unity over REST or a pipe.
-Feasible, and it could demo next week. Rejected for shipping:
-
-- **Transport is not the problem.** 24 kHz mono float32 is 96 KB/s; loopback
-  adds well under a millisecond. Anyone arguing REST is too slow for this is
-  wrong.
-- **VRAM is the problem.** It keeps the PyTorch path: ~5.0 GB for TTS against
-  ~1.8 GB for ggml, plus a second CUDA context (~300–600 MB), in a separate
-  process the renderer cannot coordinate with. That is 3–4 GB of a player's card
-  handed to a subprocess — most of an 8 GB card.
-- **Payload and startup.** torch+cu128 is ~5.7 GB installed; with transformers,
-  nltk and an embeddable interpreter it is 6–7 GB on top of the game and the
-  models. Cold start is interpreter + `import torch` (1–3 s alone) + CUDA init +
-  the 2.6 s model load.
-- **Fragility.** The README's "GPU setup" section is the evidence: six exact
-  `==` pins, an sm_120 wheel-index trap, a flash-attn build that segfaults nvcc,
-  and a `transformers` ceiling where 5.16 breaks Mimi loading. That is an
-  honestly documented *development* environment. It is not something to put on a
-  stranger's machine.
-- **Barge-in gets harder.** `cancel()` is one synchronous call across three
-  stages today. Across a process boundary it becomes a cancel endpoint racing an
-  in-flight audio stream, with Unity discarding PCM already in transit — new
-  correctness surface on a hard requirement.
-- If it *is* used (dev tool, internal build, early-access experiment), use stdio
-  or a named pipe rather than a TCP listener: a listening socket in a game
-  directory draws a Windows Defender Firewall prompt and antivirus attention.
-
-## Rejected: rebuild in managed C# for IL2CPP
-
-IL2CPP transpiles C# to C++ and compiles AOT. It does not produce CUDA kernels.
-So "rebuild it in C#" resolves to one of two things, and neither is what it
-sounds like:
-
-**C# that P/Invokes native inference libraries** is Stage 3 above with a
-different name. The inference is still native C++. This is the right *delivery*
-shape, not a separate option.
-
-**Genuinely managed inference via Unity Inference Engine** (the renamed Sentis)
-fails on three independent counts:
-
-1. **Quantization ceiling.** It supports None (fp32), Float16 and Uint8 —
-   [nothing below 8-bit](https://docs.unity3d.com/Packages/com.unity.ai.inference@2.6/manual/quantize-a-model.html).
-   There is no Q4_K_M equivalent. The 4B LLM at uint8 is ~4 GB and the 1.7B TTS
-   ~1.7 GB, against 3.0 + 1.8 GB today, before KV cache and activations, in a
-   process that also has to render a game.
-2. **Quantization buys no speed there.** Unity's own docs frame it as reducing
-   storage and memory "without significantly affecting inference speed" — it
-   dequantizes to compute. So fp16 compute cost at uint8 accuracy, and per-tensor
-   linear uint8 on an acoustic-token predictor is likely audibly destructive.
-3. **The ONNX export does not exist.** Nobody has exported Qwen3-TTS's dual-track
-   streaming architecture with an incremental KV cache to ONNX. On Unity's own
-   forums, users cannot get plain Phi-3 / SmolLM through the importer and no
-   Unity staffer answers with a supported path. We would be pioneering the export
-   *and* the runtime support.
-
-The honest version of the managed path is: write a GGUF loader, an attention and
-KV cache implementation, and a code2wav vocoder as HLSL compute shaders — i.e.
-reimplement ggml's Vulkan backend. Person-years, landing slower than the library
-we can link today.
-
-And note the sting: if the appeal was "portable GPU compute without a CUDA
-dependency", **ggml already has a Vulkan backend**, inside the option we chose.
+1. **LLM backend.** Add an `ILlmBackend`/llama.cpp wrapper mirroring `ITtsBackend`, feeding token deltas into a `BlockingQueue<std::string>` the same way `Qwen3TtsBackend` feeds PCM, including its own `warmup()` (one throwaway generation through the loaded context) for `llmvoice_warmup` to call alongside the TTS one.
+2. **`textprep`.** Port the `<think>`-stripping state machine from `py/src/llmvoice/`. Pin behavior against `py/tests/test_textprep.py`.
+3. **Segmenter + coalescer.** Port `py/src/llmvoice/segmentation.py`'s logic (minimum sentence length, never-split-numbers guard, no quick-yield of the first fragment — each segment is a separate VoiceDesign generation and a clause-length opener resamples the speaker as a different voice). No library covers this: generic sentence-boundary detectors (e.g. ICU's `BreakIterator`) don't know the never-split-numbers or coalescing rules, and pulling one in would still need the same custom logic on top. Port the ~100 lines directly; pin against `py/tests/test_segmentation.py`.
+4. **The PCM ring (vendored, e.g. `ma_rb`) + the mutex-guarded text buffer + `UnderrunTracker` port**, sitting behind `poll_pcm`/`poll_text` as described above.
+5. **The C ABI itself** (`cpp/include/llmvoice.h` + `SHARED` CMake target; currently `BUILD_SHARED_LIBS` is forced off).
+6. **Migrate `main.cpp`** to the ABI, per above.
+7. **Decide the sample-rate resample point**: native layer vs. Unity's `AudioClip` resampling against the project's mixer rate. Affects which side of the ring buffer the resampler sits on — decide before step 8.
+8. **Thin C# P/Invoke wrapper + `OnAudioFilterRead`/`PCMReaderCallback`.** Blittable types only, no delegates crossing the boundary.
+9. **Loading-time UX.** Two GGUF models + codec load slowly enough to need a loading screen or background warmup.
+10. **GPU frame-budget measurement.** ggml's kernel queue doesn't know about a 16.6 ms frame budget. Measure frame-time percentiles as soon as the LLM+TTS pipeline runs end-to-end (steps 1-4), not after Unity integration. Levers if hitches show up: cap `n_gpu_layers`, move the LLM to CPU under GPU contention, or gate speech to moments where a hitch is cheap.

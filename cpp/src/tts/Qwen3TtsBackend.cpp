@@ -6,13 +6,16 @@
 
 class Qwen3TtsBackend : public ITtsBackend {
 private:
-    /// @brief One handle per loaded talker+codec GGUF pair. Aggregates talker LM weights, code predictor MTP head, optional speaker encoder, the 12Hz codec, the BPE tokenizer, and the GGML backend pair.
+    int64_t _seed;
+    std::string _instruct;
+
+    // One handle per loaded talker+codec GGUF pair. Aggregates talker LM weights, code predictor MTP head, optional speaker encoder, the 12Hz codec, the BPE tokenizer, and the GGML backend pair.
     qt_context* _context;
     std::mutex _mutex;
     bool _cancelled = false;
 
 public:
-    Qwen3TtsBackend(std::string talkerPath, std::string codecPath) {
+    Qwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath) {
         struct qt_init_params initParams;
         qt_init_default_params(&initParams);
         
@@ -29,6 +32,12 @@ public:
         qt_free(_context);
     }
 
+    /// @copydoc ITtsBackend::createFreshContext
+    void createFreshContext(const int64_t seed, const std::string& instruct) override {
+        _seed = seed;
+        _instruct = instruct;
+    }
+
     /// @copydoc ITtsBackend::warmup
     void warmup() override {
         qt_tts_params params;
@@ -41,13 +50,8 @@ public:
         qt_audio_free(&out);
     }
 
-    /// @copydoc ITtsBackend::synthesize_to_queue
-    void synthesize_to_queue(
-        const std::string& prompt, 
-        const std::string& instruct, 
-        BlockingQueue<std::vector<float>>& queue,
-        int64_t seed = -1) override {
-
+    /// @copydoc ITtsBackend::synthesizeToQueue
+    void synthesizeToQueue(const std::string& prompt, BlockingQueue<std::vector<float>>& queue) override {
         {
             std::lock_guard lock(_mutex);
             _cancelled = false;
@@ -65,8 +69,8 @@ public:
         qt_tts_default_params(&params);
 
         params.text = prompt.c_str();
-        params.instruct = instruct.c_str();
-        params.seed = seed;
+        params.seed = _seed;
+        params.instruct = _instruct.c_str();
         
         params.on_chunk_user_data = &queue;
         params.on_chunk = [](const float* samples, int n, void* userData) -> bool {
@@ -99,6 +103,6 @@ public:
     }
 };
 
-std::unique_ptr<ITtsBackend> createQwen3TtsBackend(std::string talkerPath, std::string codecPath) {
-    return std::make_unique<Qwen3TtsBackend>(std::move(talkerPath), std::move(codecPath));
+std::unique_ptr<ITtsBackend> createQwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath) {
+    return std::make_unique<Qwen3TtsBackend>(talkerPath, codecPath);
 }

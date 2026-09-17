@@ -147,8 +147,10 @@ target_link_libraries(qwen-core PUBLIC ggml Threads::Threads)
 # --- Our targets --------------------------------------------------------------
 
 add_executable(llmvoice_cpp src/main.cpp
-  src/tts/Qwen3TtsBackend.cpp)
-target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 qwen-core)
+  src/tts/Qwen3TtsBackend.cpp
+  src/llm/Qwen3Backend.cpp)
+
+target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 llama qwen-core)
 
 target_compile_definitions(
     llmvoice_cpp PRIVATE

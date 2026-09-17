@@ -8,19 +8,18 @@ class ITtsBackend {
 public:
     virtual ~ITtsBackend() = default;
 
+    /// @brief Sets the speaker persona for the following generation.
+    /// @param seed Seed for improved speaker consistency.
+    /// @param instruct Define the speaker voice.
+    virtual void createFreshContext(const int64_t seed, const std::string& instruct) = 0;
+
     /// @brief Runs a synthesis without returning anything.
     virtual void warmup() = 0;
 
-    /// @brief Runs a streaming synthesis, writing to the queue.
+    /// @brief Runs a streaming synthesis, writing audio chunks to the queue.
     /// @param text The text to speak.
-    /// @param instruct Define the speaker voice.
     /// @param queue Receives generated synthesis chunks. NOTE: Closed after synthesis!
-    /// @param seed Optionally pass a seed for improved speaker consistency.
-    virtual void synthesize_to_queue(
-        const std::string& text, 
-        const std::string& instruct, 
-        BlockingQueue<std::vector<float>>& queue,
-        int64_t seed = -1) = 0;
+    virtual void synthesizeToQueue(const std::string& text, BlockingQueue<std::vector<float>>& queue) = 0;
 
     /// @brief Cancels a running synthesis.
     virtual void cancel() = 0;
