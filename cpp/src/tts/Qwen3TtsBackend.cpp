@@ -58,12 +58,7 @@ public:
         }
 
         // since there is no `finally` we use this tmp object's destroyer to clean up
-        struct QueueCloser {
-            BlockingQueue<std::vector<float>>& q;
-            ~QueueCloser() {
-                q.close();
-            }
-        } closer {queue};
+        QueueCloser closer {queue};
             
         qt_tts_params params;
         qt_tts_default_params(&params);

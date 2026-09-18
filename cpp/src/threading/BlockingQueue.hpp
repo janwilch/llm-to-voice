@@ -79,3 +79,11 @@ public:
         _notFull.notify_all();
     }
 };
+
+template <typename T>
+struct QueueCloser {
+    BlockingQueue<T>& q;
+    ~QueueCloser() {
+        q.close();
+    }
+};

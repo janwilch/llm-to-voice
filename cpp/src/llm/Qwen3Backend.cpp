@@ -9,6 +9,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -30,14 +31,15 @@ private:
     std::mutex _mutex;
     bool _cancelled = false;
 
-    void tokenizeAndCache(const std::string& buffer, bool freshContext) {
+    /// @brief Tokenize an LLM input.
+    std::vector<llama_token> tokenize(const std::string& llmIn, bool freshContext) {
         // guess extra buffer (otherwise resize in next step)
-        std::vector<llama_token> tokens(buffer.size() + 8);
+        std::vector<llama_token> tokens(llmIn.size() + 8);
 
         int32_t count = llama_tokenize(
             _vocab,
-            buffer.data(),
-            (int32_t)buffer.size(),
+            llmIn.data(),
+            (int32_t)llmIn.size(),
             tokens.data(),
             (int32_t)tokens.size(),
             freshContext,
@@ -48,8 +50,8 @@ private:
             tokens.resize(-count);
             count = llama_tokenize(
                 _vocab,
-                buffer.data(),
-                (int32_t)buffer.size(),
+                llmIn.data(),
+                (int32_t)llmIn.size(),
                 tokens.data(),
                 (int32_t)tokens.size(),
                 freshContext,
@@ -57,16 +59,46 @@ private:
         }
 
         tokens.resize(count);
+        return tokens;
 
-        // prefill in n_batch chunks
-        const int32_t n_batch = (int32_t)llama_n_batch(_context.get());
-        for (int32_t i = 0; i < count; i += n_batch) {
-            int32_t chunk = std::min(n_batch, count - i);
-            llama_batch batch = llama_batch_get_one(tokens.data() + i, chunk);
-            if (llama_decode(_context.get(), batch) != 0) {
-                throw std::runtime_error(std::format("llama_decode failed on batch {}/{}", i, count));
-            }
+        // # TODO - upgrade the following to the proper API (and move to separate method)
+        // // prefill in n_batch chunks
+        // const int32_t n_batch = (int32_t)llama_n_batch(_context.get());
+        // for (int32_t i = 0; i < count; i += n_batch) {
+        //     int32_t chunk = std::min(n_batch, count - i);
+        //     llama_batch batch = llama_batch_get_one(tokens.data() + i, chunk);
+        //     if (llama_decode(_context.get(), batch) != 0) {
+        //         throw std::runtime_error(std::format("llama_decode failed on batch {}/{}", i, count));
+        //     }
+        // }
+    }
+
+    void batchAndDecode(std::vector<llama_token>& tokens, BlockingQueue<std::string>& outQueue) {
+        llama_batch batch = llama_batch_init(
+            tokens.size(), 
+            0, // use token-id inputs, not raw embeddings
+            1); // we don't need multi-sequence batching
+
+        llama_pos startPos = llama_memory_seq_pos_max(llama_get_memory(_context.get()), 0);
+
+        // returns -1 on an empty sequence
+        startPos = std::max(startPos, 0);
+
+        for (auto&& [i, token] : std::views::enumerate(tokens)) {
+            batch.token[i] = token;
+            batch.pos[i] = startPos++;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i] = 0;
+
+            // whether to output per-vocab-token scores for this token (i.e. prediction for next token)
+            batch.logits[i] = i == tokens.size() - 1;
         }
+
+        batch.n_tokens = tokens.size();
+
+        llama_decode(_context.get(), batch);
+
+        llama_batch_free(batch);
     }
 
 public:
@@ -122,35 +154,36 @@ public:
         }
 
         // estimate buffer (otherwise a resize happens; also okay)
-        std::string buffer(systemPrompt.length() + 128, '\0');
+        std::string chatBuffer(systemPrompt.length() + 128, '\0');
         int32_t size = llama_chat_apply_template(
             _chatTemplate,
             messages.data(),
             messages.size(),
             false,
-            buffer.data(),
-            buffer.size());
+            chatBuffer.data(),
+            chatBuffer.size());
         
         if (size < 0) {
             throw std::runtime_error("failed to apply system prompt");
         }
 
-        if ((size_t)size > buffer.size()) {
-            buffer.resize(size);
+        if ((size_t)size > chatBuffer.size()) {
+            chatBuffer.resize(size);
             llama_chat_apply_template(
                 _chatTemplate,
                 messages.data(),
                 messages.size(),
                 false,
-                buffer.data(),
+                chatBuffer.data(),
                 size);
         }
             
-        buffer.resize(size);
-        _lastFormatted = buffer;
+        chatBuffer.resize(size);
+        _lastFormatted = chatBuffer;
+        _cancelled = false;
 
         // prepare the KV cache
-        tokenizeAndCache(buffer, true);
+        tokenize(chatBuffer, true);
     }
 
     /// @copydoc ILlmBackend::warmup
@@ -165,7 +198,7 @@ public:
     
     /// @copydoc ILlmBackend::cancel
     void cancel() override {
-        ;
+        // TODO - handle _cancelled
     }
 };
 
