@@ -17,7 +17,8 @@ public:
     /// @brief Runs a streaming LLM call, writing response tokens to the queue.
     /// @param prompt The LLM prompt.
     /// @param queue Receives generated LLM tokens. NOTE: Closed after synthesis!
-    virtual void synthesizeToQueue(const std::string& prompt, BlockingQueue<std::string>& queue) = 0;
+    /// @param maxTokens The maximum number of generated response tokens.
+    virtual void synthesizeToQueue(const std::string& prompt, BlockingQueue<std::string>& queue, int32_t maxTokens = 1024) = 0;
     
     /// @brief Cancels a running synthesis.
     virtual void cancel() = 0;
