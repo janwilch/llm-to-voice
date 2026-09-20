@@ -7,13 +7,6 @@
 #include <memory>
 #include <string>
 
-struct BatchCloser {
-    llama_batch& b;
-    ~BatchCloser() {
-        llama_batch_free(b);
-    }
-};
-
 struct BackendLifetime {
     BackendLifetime() { llama_backend_init(); }
     ~BackendLifetime() { llama_backend_free(); }

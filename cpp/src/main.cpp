@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
     BlockingQueue<std::vector<float>> queue(queueCapacity);
 
     std::jthread producer([&backend, &prompt, &voice, &queue] {
-        backend->synthesizeToQueue(prompt, voice, queue, -1);
+        backend->createFreshContext(-1, "default");
+        backend->synthesizeToQueue(prompt, queue);
     });
 
     int chunkNo = 0;
