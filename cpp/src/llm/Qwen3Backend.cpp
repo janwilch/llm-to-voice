@@ -133,7 +133,7 @@ private:
             
             for (auto&& [j, token] : std::views::enumerate(slice)) {
                 _batch.token[j] = token;
-                _batch.pos[j] = ++startPos;
+                _batch.pos[j] = startPos++;
                 _batch.n_seq_id[j] = 1;
                 _batch.seq_id[j][0] = 0;
         
@@ -349,16 +349,16 @@ public:
                 break;
             }
 
-            _committed.push_back(next);
             std::string piece = tokenToPiece(next);
             queue.push(piece);
             reply.content += piece;
-
+            
             if (!decode({ next })) {
                 _kvUnknown = true;
                 throw std::runtime_error("decode failed");
             }
-
+            
+            _committed.push_back(next);
             next = llama_sampler_sample(_sampler.get(), _context.get(), -1);
         }
     }

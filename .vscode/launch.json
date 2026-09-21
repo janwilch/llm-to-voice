@@ -2,14 +2,54 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug llmvoice_cpp",
+            "name": "Debug llm-only (segmented)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-p", "Hello my friend",
-                "--tts-backend", "qwen3-tts",
-                "--voice", "A happily excized middle-aged man"
+                "llm-only"
+            ],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "MIMode": "gdb",
+            "externalConsole": false
+        },
+        {
+            "name": "Debug llm-only --skip-segmenter",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [
+                "-p", "Hello my friend",
+                "llm-only",
+                "--skip-segmenter"
+            ],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "MIMode": "gdb",
+            "externalConsole": false
+        },
+        {
+            "name": "Debug tts-only (audio)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [
+                "-p", "Hello, this is a text to speech test.",
+                "tts-only"
+            ],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "MIMode": "gdb",
+            "externalConsole": false
+        },
+        {
+            "name": "Debug tts-only --no-audio",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [
+                "-p", "Hello, this is a text to speech test.",
+                "tts-only",
+                "--no-audio"
             ],
             "cwd": "${command:cmake.launchTargetDirectory}",
             "MIMode": "gdb",

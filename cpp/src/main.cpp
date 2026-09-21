@@ -1,65 +1,61 @@
 #include <CLI/CLI.hpp>
 #include <print>
-#include <thread>
+#include <string_view>
 
-#include "helpers/EnumToString.hpp"
-
-#include "threading/BlockingQueue.hpp"
-
-#include "tts/ITtsBackend.hpp"
-#include "tts/Qwen3TtsBackend.hpp"
-#include "tts/TtsBackendType.hpp"
+#include "llmvoice.h"
 
 int main(int argc, char** argv) {
     CLI::App app("llmvoice - LLM chat to speech pipeline");
+    app.require_subcommand(1);
 
-    std::map<std::string, TtsBackendType> backendMap{
-        {"qwen3-tts", TtsBackendType::Qwen3Tts},
-        {"fake", TtsBackendType::Fake}
-    };
-    
-    TtsBackendType ttsBackend = TtsBackendType::None;
-    std::string voice = "default";
     std::string prompt;
-    bool fakeLlm;
-    bool noAudio;
+    app.add_option("--prompt,-p", prompt, "Prompt text")->required();
 
-    app.add_option("--tts-backend", ttsBackend, "set the TTS backend - 'fake' runs the pipeline w/o GPU")
-        ->transform(CLI::CheckedTransformer(backendMap));
+    // llm-only subcommand
+    CLI::App* llmOnly = app.add_subcommand("llm-only", "Run only the LLM stage");
+    bool skipSegmenter = false;
+    llmOnly->add_flag("--skip-segmenter", skipSegmenter, "Output raw text pieces without segmentation");
 
-    app.add_option("--voice", voice, "select a voice or omit for default");
-    app.add_option("-p,--prompt", prompt, "the prompt");
-    
-    app.add_flag("--fake-llm", fakeLlm, "canned LLM replies without llama");
-    app.add_flag("--no-audio", noAudio, "run without opening audio device");
+    // tts-only subcommand
+    CLI::App* ttsOnly = app.add_subcommand("tts-only", "Run only the TTS stage");
+    bool noAudio = false;
+    ttsOnly->add_flag("--no-audio", noAudio, "Only print generated chunk info; no audio output");
 
     CLI11_PARSE(app, argc, argv);
-    
-    std::print("llmvoice - tts={} voice={}, fake-llm={}, no-audio={}\nprompt={}\n", 
-        ttsBackend, voice, fakeLlm, noAudio, prompt);
 
-    // -------------- set up & run the TTS model --------------
+    // -------------- set up & run the backend --------------
+    std::string llmModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf";
     std::string talkerModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-voicedesign-Q4_K_M.gguf";
     std::string codecModel  = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-tokenizer-12hz-Q4_K_M.gguf";
 
-    std::unique_ptr<ITtsBackend> backend = createQwen3TtsBackend(talkerModel, codecModel);
-    size_t queueCapacity = 8;
-    BlockingQueue<std::vector<float>> queue(queueCapacity);
+    LlmvoiceConfig config {
+        llmModel.c_str(),
+        8192,
+        talkerModel.c_str(),
+        codecModel.c_str()
+    };
 
-    std::jthread producer([&backend, &prompt, &voice, &queue] {
-        backend->createFreshContext(-1, "default");
-        backend->synthesizeToQueue(prompt, queue);
-    });
+    LlmvoiceHandle* handle = llmvoiceCreate(&config);
+    llmvoiceWarmup(handle);
 
-    int chunkNo = 0;
-    while (std::optional<std::vector<float>> chunk = queue.pop()) {
-        try {
-            std::print("chunk {}: {} samples\n", chunkNo++, chunk->size());
-        }
-        catch (const std::exception& ex) {
-            std::print(stderr, "synthesis failed: {}\n", ex.what());
-        }
+    if (*llmOnly) {
+        llmvoiceCreateLlmContext(handle, "default");
+        llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter);
+    } else if (*ttsOnly) {
+        // TODO
+    } else {
+        // TODO - full pipeline
     }
 
+    int32_t llmBufferSize = 64;
+    std::string llmBuffer(64, '\0');
+    
+    while (!llmvoiceIsDone(handle)) {
+        int written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
+        std::println("{}", std::string_view(llmBuffer.data(), written));
+        // TODO - TTS polling
+    }
+
+    llmvoiceDestroy(handle);
     return 0;
 }

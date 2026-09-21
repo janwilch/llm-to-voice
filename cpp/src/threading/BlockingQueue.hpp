@@ -78,6 +78,16 @@ public:
         _notEmpty.notify_all();
         _notFull.notify_all();
     }
+
+    bool empty() {
+        std::lock_guard lock(_mutex);
+        return _items.empty();
+    }
+
+    bool closed() {
+        std::lock_guard lock(_mutex);
+        return _closed;
+    }
 };
 
 template <typename T>
