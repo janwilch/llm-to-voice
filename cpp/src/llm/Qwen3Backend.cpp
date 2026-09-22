@@ -46,7 +46,10 @@ private:
     std::vector<llama_token> _committed; // what's actually in KV seq 0, positions [0, size())
     bool _kvUnknown = false; // e.g. after unsuccessful decode
 
-    std::string getHistoryFormatted(bool addAssistant) {
+    /// @brief empty reasoning block prefilled into the assistant turn, so the model resumes *after* `</think>` rather than reasoning
+    static constexpr const char* noThinkPrefill = "<think>\n\n</think>\n\n";
+
+    std::string getHistoryFormatted(bool addAssistant, bool noThink) {
         std::vector<llama_chat_message> messages;
         for (auto&& [role, content] : _history) {
             messages.push_back({role.c_str(), content.c_str()});
@@ -78,6 +81,11 @@ private:
         }
 
         chatBuffer.resize(size);
+
+        if (addAssistant && noThink) {
+            chatBuffer += noThinkPrefill;
+        }
+
         return chatBuffer;
     }
 
@@ -177,8 +185,8 @@ private:
     }
     
     /// @brief Compares _history and _committed and decodes everything that isn't committed yet.
-    void decodeAllHistory(bool addAssistant) {
-        std::vector<llama_token> historyTokens = tokenize(getHistoryFormatted(addAssistant), true);
+    void decodeAllHistory(bool addAssistant, bool noThink = false) {
+        std::vector<llama_token> historyTokens = tokenize(getHistoryFormatted(addAssistant, noThink), true);
 
         // ensure no context overrun
         const size_t tokenBudget = (size_t)(llama_n_ctx(_context.get()) * 0.8);
@@ -186,7 +194,7 @@ private:
             std::println(stderr, "history exceeds token budget {} - dropping oldest turn", historyTokens.size(), tokenBudget);
             // always keep [0] = system prompt
             _history.erase(_history.begin() + 1, _history.begin() + 3);
-            historyTokens = tokenize(getHistoryFormatted(addAssistant), true);
+            historyTokens = tokenize(getHistoryFormatted(addAssistant, noThink), true);
         }
 
         llama_memory_t memory = llama_get_memory(_context.get());
@@ -326,7 +334,7 @@ public:
     }
     
     /// @copydoc ILlmBackend::synthesizeToQueue
-    void synthesizeToQueue(const std::string &prompt, BlockingQueue<std::string> &queue, int32_t maxTokens) override {
+    void synthesizeToQueue(const std::string &prompt, BlockingQueue<std::string> &queue, bool noThink, int32_t maxTokens) override {
         std::lock_guard lock(_ctxMutex);        
         QueueCloser closer { queue };
         _cancelled = false;
@@ -341,7 +349,7 @@ public:
             }
         } reply { _history, "" };
 
-        decodeAllHistory(true);
+        decodeAllHistory(true, noThink);
 
         llama_token next = llama_sampler_sample(_sampler.get(), _context.get(), -1);
         for (int32_t i = 0; i < maxTokens && !_cancelled; i++) {

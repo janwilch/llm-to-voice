@@ -12,7 +12,7 @@ class BlockingQueue {
 private:
     std::deque<T> _items;
     size_t _capacity;
-    std::mutex _mutex;
+    mutable std::mutex _mutex; // mutable to allow the const empty() and closed methods
     std::condition_variable _notEmpty;
     std::condition_variable _notFull;
     bool _closed = false;
@@ -79,12 +79,12 @@ public:
         _notFull.notify_all();
     }
 
-    bool empty() {
+    bool empty() const {
         std::lock_guard lock(_mutex);
         return _items.empty();
     }
 
-    bool closed() {
+    bool closed() const {
         std::lock_guard lock(_mutex);
         return _closed;
     }

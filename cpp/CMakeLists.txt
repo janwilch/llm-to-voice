@@ -166,5 +166,11 @@ add_executable(deps_smoke tests/deps_smoke.cpp)
 target_link_libraries(deps_smoke PRIVATE llama qwen-core)
 add_test(NAME deps_smoke COMMAND deps_smoke)
 
+# The segmenter is header-only and touches no model, so this links nothing but
+# a thread library and runs in milliseconds.
+add_executable(segmenter_test tests/segmenter_test.cpp)
+target_link_libraries(segmenter_test PRIVATE Threads::Threads)
+add_test(NAME segmenter_test COMMAND segmenter_test)
+
 message(STATUS "llama.cpp   vendored at ${llama_cpp_SOURCE_DIR}")
 message(STATUS "qwentts.cpp vendored at ${qwentts_cpp_SOURCE_DIR}")

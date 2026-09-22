@@ -11,6 +11,9 @@ int main(int argc, char** argv) {
     std::string prompt;
     app.add_option("--prompt,-p", prompt, "Prompt text")->required();
 
+    bool noThink = false;
+    app.add_flag("--no-think", noThink, "Suppress the model's reasoning block (faster first response, lower answer quality)");
+
     // llm-only subcommand
     CLI::App* llmOnly = app.add_subcommand("llm-only", "Run only the LLM stage");
     bool skipSegmenter = false;
@@ -40,7 +43,7 @@ int main(int argc, char** argv) {
 
     if (*llmOnly) {
         llmvoiceCreateLlmContext(handle, "default");
-        llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter);
+        llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter, noThink);
     } else if (*ttsOnly) {
         // TODO
     } else {

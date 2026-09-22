@@ -1,6 +1,7 @@
 #include "llmvoice.h"
 #include "llm/ILlmBackend.hpp"
 #include "llm/Qwen3Backend.hpp"
+#include "segmenter/Segmenter.hpp"
 #include "threading/BlockingQueue.hpp"
 #include "tts/ITtsBackend.hpp"
 #include "tts/Qwen3TtsBackend.hpp"
@@ -25,6 +26,7 @@ struct PipelineSession {
     bool audio;
 
     std::string llmTextRemainder;
+    bool llmTextStarted = false;
     
     std::jthread llmThread;
     std::jthread segmentThread;
@@ -67,11 +69,11 @@ void llmvoiceCreateTtsContext(LlmvoiceHandle* handle, const long seed, const cha
     handle->ttsBackend->createFreshContext(seed, instructUtf8);
 }
 
-void llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8) {
+void llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, bool noThink) {
     // TODO
 }
 
-void llmvoiceSubmitLlm(LlmvoiceHandle* handle, const char *promptUtf8, bool segment) {
+void llmvoiceSubmitLlm(LlmvoiceHandle* handle, const char *promptUtf8, bool segment, bool noThink) {
     if (handle->session) {
         throw std::runtime_error("Cannot submit a new session, while another session is in progress.");
     }
@@ -89,12 +91,17 @@ void llmvoiceSubmitLlm(LlmvoiceHandle* handle, const char *promptUtf8, bool segm
         handle->session->segmentsOutQueue.close();
     }
     
-    handle->session->llmThread = std::jthread([prompt, handle]() -> void {
-        handle->llmBackend->synthesizeToQueue(prompt, handle->session->llmTokenQueue);
+    PipelineSession* session = handle->session.get();
+    
+    if (segment) {
+        session->segmentThread = std::jthread([session]() -> void {
+            Segmenter segmenter;
+            segmenter.segment(session->llmTokenQueue, session->segmentsOutQueue);
+        });
+    }
 
-        if (handle->session->segment) {
-            // TODO - llmTokenQueue -> segmenter -> segmentsOutQueue
-        }
+    handle->session->llmThread = std::jthread([prompt, handle, session, noThink]() -> void {
+        handle->llmBackend->synthesizeToQueue(prompt, session->llmTokenQueue, noThink);
     });
 }
 
@@ -143,14 +150,20 @@ int llmvoicePollText(LlmvoiceHandle* handle, char *dstUtf8, int maxBytes) {
             break;
         }
 
+        std::string text = session.segment && session.llmTextStarted
+            ? " " + piece.value()
+            : std::move(piece.value());
+
+        session.llmTextStarted = true;
+
         size_t remaining = maxBytes - written;
-        size_t count = std::min(remaining, piece->size());
-        std::memcpy(dstUtf8 + written, piece->data(), count);
+        size_t count = std::min(remaining, text.size());
+        std::memcpy(dstUtf8 + written, text.data(), count);
         written += count;
 
-        if (count < piece->size()) {
+        if (count < text.size()) {
             // store remainder for next poll
-            session.llmTextRemainder.assign(piece.value(), count);
+            session.llmTextRemainder.assign(text, count);
             break;
         }
     }
@@ -164,13 +177,10 @@ int llmvoicePollPcm(LlmvoiceHandle* handle, float dst, int maxFrames) {
 
 int llmvoiceIsDone(LlmvoiceHandle* handle) {
     return handle->session == nullptr || (
+        handle->session->llmTextRemainder.empty() &&
         (handle->session->llmTokenQueue.empty() && handle->session->llmTokenQueue.closed()) &&
         (handle->session->segmentsToTtsQueue.empty() && handle->session->segmentsToTtsQueue.closed()) &&
         (handle->session->segmentsOutQueue.empty() && handle->session->segmentsOutQueue.closed()) &&
         (handle->session->pcmOutQueue.empty() && handle->session->pcmOutQueue.closed())
     );
 }
-
-// -------------------- "private" functions --------------------
-
-

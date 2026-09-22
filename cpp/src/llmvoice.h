@@ -28,11 +28,11 @@ void llmvoiceCreateLlmContext(LlmvoiceHandle*, const char* systemPromptUtf8);
 void llmvoiceCreateTtsContext(LlmvoiceHandle*, const long seed, const char* instructUtf8);
 
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
-void llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8);
+void llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink = false);
 
 /// @brief Submit a prompt to run only through the LLM and optionally the segmenter.
 /// Only `pollText` will yield output.
-void llmvoiceSubmitLlm(LlmvoiceHandle*, const char* promptUtf8, bool segment = true);
+void llmvoiceSubmitLlm(LlmvoiceHandle*, const char* promptUtf8, bool segment = true, bool noThink = false);
 
 /// @brief Submit a text to run only through TTS.
 /// Only `pollPcm` will yield output.
