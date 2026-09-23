@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdint>
 #include <cstdio>
 #include <format>
 #include <memory>
@@ -20,10 +19,11 @@
 #include <utility>
 #include <vector>
 
+namespace {
 /// @brief Interfaces with Qwen3 in llama.cpp. *Only one instance* must ever exist per codebase.
 class Qwen3Backend : public ILlmBackend {
-private:
     // spins up & winds down the whole llama.cpp backend
+    // ReSharper disable once CppDeclaratorNeverUsed
     BackendLifetime _lifetime;
 
     // generated *once* in constructor
@@ -38,8 +38,8 @@ private:
     std::mutex _ctxMutex;
 
     // reused batching
-    int32_t _batchSize;
-    llama_batch _batch;
+    uint32_t _batchSize;
+    llama_batch _batch{};
 
     // state
     std::vector<std::pair<std::string, std::string>> _history; // [(role, content)]
@@ -47,24 +47,27 @@ private:
     bool _kvUnknown = false; // e.g. after unsuccessful decode
 
     /// @brief empty reasoning block prefilled into the assistant turn, so the model resumes *after* `</think>` rather than reasoning
-    static constexpr const char* noThinkPrefill = "<think>\n\n</think>\n\n";
+    static constexpr auto  noThinkPrefill = "<think>\n\n</think>\n\n";
 
-    std::string getHistoryFormatted(bool addAssistant, bool noThink) {
+    std::string getHistoryFormatted(const bool addAssistant, const bool noThink) {
         std::vector<llama_chat_message> messages;
+        messages.reserve(_history.size());
         for (auto&& [role, content] : _history) {
-            messages.push_back({role.c_str(), content.c_str()});
+            messages.push_back({
+                .role = role.c_str(),
+                .content = content.c_str()});
         }
 
         // estimate buffer (otherwise a resize happens; also okay)
         std::string chatBuffer(1024, '\0');
-        int32_t size = llama_chat_apply_template(
+        const int32_t size = llama_chat_apply_template(
             _chatTemplate,
             messages.data(),
             messages.size(),
             addAssistant,
             chatBuffer.data(),
-            chatBuffer.size());
-        
+            static_cast<int32_t>(chatBuffer.size()));
+
         if (size < 0) {
             throw std::runtime_error("failed to format chat history");
         }
@@ -90,28 +93,28 @@ private:
     }
 
     /// @brief Tokenize an LLM input.
-    std::vector<llama_token> tokenize(const std::string& llmIn, bool freshContext) {
+    [[nodiscard]] std::vector<llama_token> tokenize(const std::string& llmIn, const bool freshContext) const {
         // guess extra buffer (otherwise resize in next step)
         std::vector<llama_token> tokens(llmIn.size() + 8);
 
         int32_t count = llama_tokenize(
             _vocab,
             llmIn.data(),
-            (int32_t)llmIn.size(),
+            static_cast<int32_t>(llmIn.size()),
             tokens.data(),
-            (int32_t)tokens.size(),
+            static_cast<int32_t>(tokens.size()),
             freshContext,
             true);
-        
+
         if (count < 0) {
             // hint by the llama ABI that resize is needed
             tokens.resize(-count);
             count = llama_tokenize(
                 _vocab,
                 llmIn.data(),
-                (int32_t)llmIn.size(),
+                static_cast<int32_t>(llmIn.size()),
                 tokens.data(),
-                (int32_t)tokens.size(),
+                static_cast<int32_t>(tokens.size()),
                 freshContext,
                 true);
         }
@@ -128,28 +131,30 @@ private:
         if (tokens.empty()) {
             return true;
         }
-        
+
         // returns -1 on an empty sequence
-        llama_pos startPos = (llama_pos)_committed.size();
+        auto startPos = static_cast<llama_pos>(_committed.size());
 
         int32_t decodeStatus = -99;
 
-        for (int i = 0; i < tokens.size(); i += _batchSize) {
+        for (uint32_t i = 0; i < tokens.size(); i += _batchSize) {
             // make sure to not exceed batch size per decode call
-            size_t chunkLen = std::min((size_t)_batchSize, tokens.size() - i);
-            std::span<const llama_token> slice { tokens.begin() + i, chunkLen };
-            
-            for (auto&& [j, token] : std::views::enumerate(slice)) {
+            const size_t chunkLen = std::min(static_cast<size_t>(_batchSize), tokens.size() - i);
+
+            for (
+                std::span slice { tokens.begin() + i, chunkLen };
+                auto&& [j, token] : std::views::enumerate(slice)
+                ) {
                 _batch.token[j] = token;
                 _batch.pos[j] = startPos++;
                 _batch.n_seq_id[j] = 1;
                 _batch.seq_id[j][0] = 0;
-        
+
                 // whether to output per-vocab-token scores for this token (i.e. prediction for next token)
                 _batch.logits[j] = i + j == tokens.size() - 1;
             }
-            
-            _batch.n_tokens = chunkLen;
+
+            _batch.n_tokens = static_cast<int32_t>(chunkLen);
 
             decodeStatus = llama_decode(_context.get(), _batch);
             if (decodeStatus != 0) {
@@ -161,35 +166,35 @@ private:
         switch (decodeStatus) {
             case 0:
                 return true;
-            
+
             case 1:
                 reason = "could not find a KV slot for the batch (try reducing the size of the batch or increase the context)";
                 break;
-            
+
             case 2:
                 reason = "generation aborted";
                 break;
-    
+
             case -1:
                 reason = "invalid input batch";
                 break;
-    
+
             default:
                 reason = std::format("fatal error (code {})", decodeStatus);
                 break;
         }
-        
+
         std::println(stderr, "decode failed: {}", reason.value_or("unknown"));
         _kvUnknown = true;
         return false;
     }
-    
+
     /// @brief Compares _history and _committed and decodes everything that isn't committed yet.
-    void decodeAllHistory(bool addAssistant, bool noThink = false) {
+    void decodeAllHistory(const bool addAssistant, const bool noThink = false) {
         std::vector<llama_token> historyTokens = tokenize(getHistoryFormatted(addAssistant, noThink), true);
 
         // ensure no context overrun
-        const size_t tokenBudget = (size_t)(llama_n_ctx(_context.get()) * 0.8);
+        const auto tokenBudget = static_cast<size_t>(llama_n_ctx(_context.get()) * 0.8);
         while (historyTokens.size() > tokenBudget && _history.size() >= 4) {
             std::println(stderr, "history exceeds token budget {} - dropping oldest turn", historyTokens.size(), tokenBudget);
             // always keep [0] = system prompt
@@ -197,11 +202,12 @@ private:
             historyTokens = tokenize(getHistoryFormatted(addAssistant, noThink), true);
         }
 
+         // ReSharper disable once CppLocalVariableMayBeConst
         llama_memory_t memory = llama_get_memory(_context.get());
 
-        size_t sameCount = 0;
+        int sameCount = 0;
         if (!_kvUnknown) {
-            size_t count = std::min(historyTokens.size(), _committed.size());
+            const size_t count = std::min(historyTokens.size(), _committed.size());
             while (sameCount < count && historyTokens[sameCount] == _committed[sameCount]) {
                 sameCount++;
             }
@@ -210,7 +216,7 @@ private:
                 sameCount--; // leave last token for logits
             }
         }
-        
+
         if (_kvUnknown || !llama_memory_seq_rm(memory, 0, sameCount, -1)) {
             // try remove the identical part from memory
             // returns false on failure -> clear all memory in that case
@@ -222,8 +228,10 @@ private:
         _kvUnknown = false;
 
         // try decode delta between history & committed
-        std::vector<llama_token> todoTokens(historyTokens.begin() + sameCount, historyTokens.end());
-        if (!todoTokens.empty() && !decode(todoTokens)) {
+        if (
+            const std::vector todoTokens(historyTokens.begin() + sameCount, historyTokens.end());
+            !todoTokens.empty() && !decode(todoTokens)
+            ) {
             _kvUnknown = true; // rebuild from scratch on next reconcile (_history stays intact)
             throw std::runtime_error("prefill failed");
         }
@@ -232,7 +240,7 @@ private:
     }
 
     /// @brief Convert a single token to its text piece.
-    std::string tokenToPiece(llama_token token) {
+    [[nodiscard]] std::string tokenToPiece(const llama_token token) const {
         // most pieces are a few bytes; resize below if not
         std::string piece(16, '\0');
 
@@ -240,14 +248,14 @@ private:
             _vocab,
             token,
             piece.data(),
-            (int32_t)piece.size(),
+            static_cast<int32_t>(piece.size()),
             0, // don't skip leading spaces
             false); // don't render <|im_end|> etc. into the text
 
         if (size < 0) {
             // hint by the llama ABI that resize is needed
             piece.resize(-size);
-            size = llama_token_to_piece(_vocab, token, piece.data(), (int32_t)piece.size(), 0, false);
+            size = llama_token_to_piece(_vocab, token, piece.data(), static_cast<int32_t>(piece.size()), 0, false);
         }
 
         if (size < 0) {
@@ -259,15 +267,15 @@ private:
     }
 
 public:
-    Qwen3Backend(const std::string& modelPath, int32_t contextSize) {
+    Qwen3Backend(const std::string& modelPath, const int32_t contextSize) {
         std::lock_guard lock(_ctxMutex);
 
-        llama_model_params modelParams = llama_model_default_params(); // tune as needed
+        const llama_model_params modelParams = llama_model_default_params(); // tune as needed
         llama_model* modelPtr = llama_model_load_from_file(modelPath.c_str(), modelParams);
         if (!modelPtr) {
             throw std::runtime_error(std::format("failed to load model: {}", modelPath));
         }
-        
+
         _model = llama_model_ptr(modelPtr);
         _vocab = llama_model_get_vocab(_model.get());
 
@@ -279,9 +287,9 @@ public:
         }
 
         _batchSize = llama_n_batch(_context.get());
-        _batch = llama_batch_init(_batchSize, 0, 1);
+        _batch = llama_batch_init(static_cast<int32_t>(_batchSize), 0, 1);
 
-        llama_sampler_chain_params samplerParams = llama_sampler_chain_default_params();
+        const llama_sampler_chain_params samplerParams = llama_sampler_chain_default_params();
         llama_sampler* samplerPtr = llama_sampler_chain_init(samplerParams);
 
         // for the sampler chain, do *not* use the default (greedy) chain, because it always only picks the most probably token
@@ -313,7 +321,7 @@ public:
         decodeAllHistory(false); // prefill the system prompt cache
         _cancelled = false;
     }
-    
+
     /// @copydoc ILlmBackend::warmup
     void warmup() override {
         std::lock_guard lock(_ctxMutex);
@@ -328,14 +336,18 @@ public:
                 llama_sampler_reset(sampler.get());
                 kvUnknown = true; // force rebuild next turn
             }
-        } raii { _context, _sampler, _kvUnknown };
+        } raii {
+            .context = _context,
+            .sampler = _sampler,
+            .kvUnknown = _kvUnknown
+        };
 
         decodeAllHistory(false);
     }
-    
+
     /// @copydoc ILlmBackend::synthesizeToQueue
-    void synthesizeToQueue(const std::string &prompt, BlockingQueue<std::string> &queue, bool noThink, int32_t maxTokens) override {
-        std::lock_guard lock(_ctxMutex);        
+    void synthesizeToQueue(const std::string &prompt, BlockingQueue<std::string> &queue, const bool noThink, const int32_t maxTokens) override {
+        std::lock_guard lock(_ctxMutex);
         QueueCloser closer { queue };
         _cancelled = false;
 
@@ -347,7 +359,10 @@ public:
             ~CommitReply() {
                 history.emplace_back("assistant", std::move(content));
             }
-        } reply { _history, "" };
+        } reply {
+            .history = _history,
+            .content = ""
+        };
 
         decodeAllHistory(true, noThink);
 
@@ -357,23 +372,23 @@ public:
                 break;
             }
 
-            std::string piece = tokenToPiece(next);
+            const std::string piece = tokenToPiece(next);
             queue.push(piece);
             reply.content += piece;
-            
+
             if (!decode({ next })) {
                 _kvUnknown = true;
                 throw std::runtime_error("decode failed");
             }
-            
+
             _committed.push_back(next);
             next = llama_sampler_sample(_sampler.get(), _context.get(), -1);
         }
     }
-    
+
     /// @copydoc ILlmBackend::cancel
     void cancel() override { _cancelled = true; }
-};
+};}
 
 std::unique_ptr<ILlmBackend> createQwen3Backend(const std::string &modelPath, int32_t contextSize) {
     return std::make_unique<Qwen3Backend>(modelPath, contextSize);

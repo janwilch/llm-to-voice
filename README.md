@@ -48,36 +48,3 @@ llmvoice_is_done:
 
 // after: destroy
 ```
-
-## C ABI
-
-This is exposed via a C ABI like so:
-
-```c
-typedef struct llmvoice_handle llmvoice_handle;
-
-typedef struct {
-  const char* llm_model_path;
-  const char* tts_talker_path;
-  const char* tts_codec_path;
-  int         sample_rate_hint;   // 0 = native 24000
-  int         llm_context_size;   // 0 = default 8192
-} llmvoice_config;
-
-llmvoice_handle* llmvoice_create(const llmvoice_config* cfg);
-void llmvoice_warmup(llmvoice_handle*);
-void llmvoice_destroy(llmvoice_handle*);
-
-void llmvoice_set_style(
-  llmvoice_handle*,
-  const char* system_prompt_utf8,
-  const int64_t speaker_seed,
-  const char* speaker_instruct);
-
-void llmvoice_submit(llmvoice_handle*, const char* prompt_utf8);
-void llmvoice_cancel(llmvoice_handle*);
-
-int llmvoice_poll_text(llmvoice_handle*, char* dst_utf8, int max_bytes);
-int llmvoice_poll_pcm(llmvoice_handle*, float* dst, int max_frames);
-int llmvoice_is_done(llmvoice_handle*);
-```

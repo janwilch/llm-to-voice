@@ -17,22 +17,22 @@ LlmvoiceHandle* llmvoiceCreate(const LlmvoiceConfig*);
 void llmvoiceDestroy(LlmvoiceHandle*);
 
 /// @brief Warm up the llmvoice backend (load models and run a throwaway generation).
-void llmvoiceWarmup(LlmvoiceHandle*);
+void llmvoiceWarmup(const LlmvoiceHandle*);
 
 /// @brief Create a fresh LLM context for generation.
 /// Call before submitting to LLM or pipeline.
-void llmvoiceCreateLlmContext(LlmvoiceHandle*, const char* systemPromptUtf8);
+void llmvoiceCreateLlmContext(const LlmvoiceHandle*, const char* systemPromptUtf8);
 
 /// @brief Create a fresh TTS context for generation.
 /// Call before submitting to TTS or pipeline.
-void llmvoiceCreateTtsContext(LlmvoiceHandle*, const long seed, const char* instructUtf8);
+void llmvoiceCreateTtsContext(const LlmvoiceHandle*, long seed, const char* instructUtf8);
 
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
 void llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink = false);
 
 /// @brief Submit a prompt to run only through the LLM and optionally the segmenter.
 /// Only `pollText` will yield output.
-void llmvoiceSubmitLlm(LlmvoiceHandle*, const char* promptUtf8, bool segment = true, bool noThink = false);
+void llmvoiceSubmitLlm(LlmvoiceHandle*, const char* promptUtf8, bool segment, bool noThink, int maxTokens);
 
 /// @brief Submit a text to run only through TTS.
 /// Only `pollPcm` will yield output.
@@ -42,10 +42,10 @@ void llmvoiceSubmitTts(LlmvoiceHandle*, const char* textUtf8, bool audio = true)
 void llmvoiceCancel(LlmvoiceHandle*);
 
 /// @brief Poll generated output from the LLM stage (optionally segmented).
-int llmvoicePollText(LlmvoiceHandle*, char* dstUtf8, int maxBytes);
+unsigned long llmvoicePollText(const LlmvoiceHandle*, char* dstUtf8, int maxBytes);
 
 /// @brief Poll generated output from the TTS stage.
 int llmvoicePollPcm(LlmvoiceHandle*, float dst, int maxFrames);
 
 /// @brief Returns 1/true if all generation completed.
-int llmvoiceIsDone(LlmvoiceHandle*);
+int llmvoiceIsDone(const LlmvoiceHandle*);

@@ -5,6 +5,8 @@
 // is GGML_MAX_NAME, which a duplicate copy can get wrong without any link
 // error, so it is checked from both sides of the boundary.
 
+#include <catch2/catch_test_macros.hpp>
+
 #include <cstdio>
 #include <cstring>
 
@@ -41,17 +43,20 @@ static bool ggml_agrees_on_max_name() {
     return ok;
 }
 
-int main() {
-    llama_backend_init();
+// RAII so the backend is torn down even if an assertion throws.
+ // ReSharper disable once CppUseInternalLinkage
+struct LlamaBackend {
+    LlamaBackend() { llama_backend_init(); }
+    ~LlamaBackend() { llama_backend_free(); }
+};
+
+TEST_CASE("llama.cpp and qwentts.cpp share one ggml", "[deps]") {
+    LlamaBackend backend;
 
     std::printf("llama.cpp   : %s\n", llama_print_system_info());
     std::printf("qwentts.cpp : %s\n", qt_version());
     std::printf("ggml        : %zu backend(s) registered\n", ggml_backend_reg_count());
+    std::printf("GGML_MAX_NAME=%d\n", GGML_MAX_NAME);
 
-    const bool ok = ggml_agrees_on_max_name();
-    std::printf("GGML_MAX_NAME=%d, ggml round-trips a 100-char name: %s\n",
-                GGML_MAX_NAME, ok ? "yes" : "NO");
-
-    llama_backend_free();
-    return ok ? 0 : 1;
+    CHECK(ggml_agrees_on_max_name());
 }

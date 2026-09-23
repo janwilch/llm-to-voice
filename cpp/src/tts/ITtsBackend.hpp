@@ -11,7 +11,7 @@ public:
     /// @brief Sets the speaker persona for the following generation.
     /// @param seed Seed for improved speaker consistency.
     /// @param instruct Define the speaker voice.
-    virtual void createFreshContext(const int64_t seed, const std::string& instruct) = 0;
+    virtual void createFreshContext(int64_t seed, const std::string& instruct) = 0;
 
     /// @brief Runs a synthesis without returning anything.
     virtual void warmup() = 0;

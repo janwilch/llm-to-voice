@@ -6,7 +6,6 @@
 #include <array>
 #include <bit>
 #include <cctype>
-#include <cstdint>
 #include <cstdio>
 #include <optional>
 #include <print>
@@ -25,7 +24,6 @@ struct SegmenterConfig {
 
 /// @brief Turns a stream of raw LLM token pieces into speakable segments: reassembles UTF-8, drops `<think>` blocks, splits on sentence ends, and merges the result up to `coalesceMinChars`.
 class Segmenter {
-private:
     /// @brief Raw bytes from llama, possibly ending mid-character.
     std::string _bytes;
     /// @brief Complete UTF-8 characters, not yet think-filtered.
@@ -61,8 +59,8 @@ private:
 
     /// @brief The number of leading ones in a UTF8 byte signals how many subsequent bytes are needed for the full character (i.e. `0xxxxxxx` = 1 byte, `110xxxxx` = 2 bytes, `1110xxxx` = 3, `11110xxx` = 4).
     /// @return 0 if `lead` cannot start a character at all.
-    size_t utf8LeadLength(unsigned char lead) {
-        int32_t ones = std::countl_one(lead);
+    static size_t utf8LeadLength(const unsigned char lead) {
+        const int32_t ones = std::countl_one(lead);
         if (ones == 0) {
             return 1;
         }
@@ -81,8 +79,8 @@ private:
         size_t pos = 0;
 
         while (pos < _bytes.size()) {
-            unsigned char lead = _bytes[pos];
-            size_t expectedBytes = utf8LeadLength(lead);
+            const unsigned char lead = _bytes[pos];
+            const size_t expectedBytes = utf8LeadLength(lead);
 
             if (expectedBytes == 0) {
                 ++pos;
@@ -119,7 +117,7 @@ private:
     }
 
     /// @brief The current generation string may *end* like "... <thi", i.e. the "nk>" has not been generated yet. This returns the length of the longest suffix of `text` that is still a proper prefix of `marker`, which is the tail that cannot be emitted yet.
-    size_t heldPrefixLength(std::string_view text, std::string_view marker) {
+    static size_t heldPrefixLength(const std::string_view text, const std::string_view marker) {
         for (size_t size = std::min(text.size(), marker.size() - 1); size > 0; --size) {
             if (marker.starts_with(text.substr(text.size() - size))) {
                 return size;
@@ -136,11 +134,11 @@ private:
 
         while (!_utf8.empty()) {
             std::string_view marker = _inThink ? thinkEnd : thinkStart;
-            size_t markerIdx = _utf8.find(marker);
+            const size_t markerIdx = _utf8.find(marker);
 
             if (markerIdx == std::string::npos) {
                 // hold back only what could still become the marker; everything before it is decided
-                size_t held = heldPrefixLength(_utf8, marker);
+                const size_t held = heldPrefixLength(_utf8, marker);
                 if (!_inThink) {
                     _text.append(_utf8, 0, _utf8.size() - held);
                 }
@@ -159,24 +157,24 @@ private:
     }
 
     /// @brief Checks (case-insensitively) whether `abbreviation` is exactly the text ending at `_text[candidate]`, as a whole word — without that, "FT." also matches the tail of "left." and "ED." the tail of "jumped.".
-    bool matchesAbbreviationAt(size_t candidate, std::string_view abbreviation) {
+    [[nodiscard]] bool matchesAbbreviationAt(const size_t candidate, std::string_view abbreviation) const {
         if (candidate + 1 < abbreviation.size()) {
             return false; // not enough preceding characters to fit the abbreviation
         }
 
-        size_t start = candidate + 1 - abbreviation.size();
+        const size_t start = candidate + 1 - abbreviation.size();
         if (start > 0 && std::isalnum(static_cast<unsigned char>(_text[start - 1]))) {
             return false; // mid-word, so it's the tail of something longer
         }
 
         std::string_view slice = std::string_view(_text).substr(start, abbreviation.size());
-        return std::ranges::equal(slice, abbreviation, [](unsigned char a, unsigned char b) {
+        return std::ranges::equal(slice, abbreviation, [](const unsigned char a, const unsigned char b) {
             return std::toupper(a) == std::toupper(b);
         });
     }
 
     /// @brief Checks some hard-coded abbreviations that take a period without ending a sentence.
-    bool isAbbreviation(size_t candidate) {
+    [[nodiscard]] bool isAbbreviation(const size_t candidate) const {
         // single letters are deliberately absent: `isSingleLetterInitial` already covers the capitalised
         // case, and "M." / "G." / "L." cost more in false positives than "5 m." is worth
         static constexpr std::array abbreviations {
@@ -203,17 +201,13 @@ private:
             "AVE.", "BLVD.", "RD.", "LN.", "CT.", "PL.", "APT.", "BLDG.", "RM.", "HWY.", "PKWY.",
         };
 
-        for (std::string_view abbreviation : abbreviations) {
-            if (matchesAbbreviationAt(candidate, abbreviation)) {
-                return true;
-            }
-        }
-
-        return false;
+        return std::ranges::any_of(abbreviations, [&](const std::string_view abbreviation) {
+            return matchesAbbreviationAt(candidate, abbreviation);
+        });
     }
 
     /// @brief Checks whether `candidate` is a period directly preceded by a single, isolated capital letter (an initial, e.g. "J." in "J. K. Rowling")
-    bool isSingleLetterInitial(size_t candidate) {
+    [[nodiscard]] bool isSingleLetterInitial(const size_t candidate) const {
         if (candidate < 1) {
             return false;
         }
@@ -231,7 +225,7 @@ private:
     }
 
     /// @brief Checks whether `candidate` is the period of a markdown list marker ("1. Open the door"). Restricted to the start of a line on purpose: anywhere else, "The answer is 42." has to keep ending a sentence.
-    bool isListMarker(size_t candidate) {
+    [[nodiscard]] bool isListMarker(const size_t candidate) const {
         size_t start = candidate;
         while (start > 0 && std::isdigit(static_cast<unsigned char>(_text[start - 1]))) {
             --start;
@@ -302,10 +296,10 @@ private:
     }
 
     /// @brief Trims ASCII whitespace from both ends. The result may be empty, in which case there is nothing worth speaking.
-    std::string_view strip(std::string_view text) {
+    static std::string_view strip(const std::string_view text) {
         static constexpr std::string_view whitespace = " \t\r\n\f\v";
 
-        size_t first = text.find_first_not_of(whitespace);
+        const size_t first = text.find_first_not_of(whitespace);
         if (first == std::string_view::npos) {
             return {};
         }
@@ -314,9 +308,9 @@ private:
     }
 
     /// @brief Whether `text` already closes with punctuation of any kind, in which case nothing is added and what the model wrote is kept.
-    bool endsWithPunctuation(std::string_view text) {
+    static bool endsWithPunctuation(const std::string_view text) {
         // "…", "–", "—" are multi-byte, so they cannot be checked as a single character
-        for (std::string_view suffix : { "\xE2\x80\xA6", "\xE2\x80\x93", "\xE2\x80\x94" }) {
+        for (const std::string_view suffix : { "\xE2\x80\xA6", "\xE2\x80\x93", "\xE2\x80\x94" }) {
             if (text.ends_with(suffix)) {
                 return true;
             }
@@ -329,7 +323,7 @@ private:
 
     /// @brief Merges sentences until the segment is at least `coalesceMinChars` long, then pushes it. Fewer, longer segments means fewer VoiceDesign speaker draws and so less voice drift.
     /// @return `false` if the consumer closed the queue.
-    bool pushCoalesced(std::string_view sentence, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig& config) {
+    bool pushCoalesced(const std::string_view sentence, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig& config) {
         if (sentence.empty()) {
             return true;
         }
@@ -350,7 +344,7 @@ private:
             return true;
         }
 
-        bool accepted = segmentsOutQueue.push(std::move(_pending));
+        const bool accepted = segmentsOutQueue.push(std::move(_pending));
         _pending.clear(); // a moved-from string is valid but unspecified, not necessarily empty
         return accepted;
     }
@@ -404,8 +398,10 @@ private:
         }
 
         // whatever is left is the last segment, sentence end or not
-        std::string_view tail = strip(_text);
-        if (!tail.empty()) {
+        if (
+            const std::string_view tail = strip(_text);
+            !tail.empty()
+            ) {
             if (!_pending.empty()) {
                 _pending += ' ';
             }
@@ -427,7 +423,7 @@ private:
 
 public:
     /// @brief Pulls token pieces until the input queue closes, pushing speakable segments as they complete. Pull-driven, so it consumes LLM tokens only as fast as the consumer takes segments.
-    void segment(BlockingQueue<std::string>& tokensInQueue, BlockingQueue<std::string>& segmentsOutQueue, SegmenterConfig config = {}) {
+    void segment(BlockingQueue<std::string>& tokensInQueue, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig config = {}) {
         // the consumer blocks on pop(), so the output queue has to close on *every* exit path
         QueueCloser closer { segmentsOutQueue };
         reset();

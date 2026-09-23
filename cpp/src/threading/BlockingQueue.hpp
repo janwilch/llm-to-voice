@@ -9,7 +9,6 @@
 /// @tparam T 
 template <typename T>
 class BlockingQueue {
-private:
     std::deque<T> _items;
     size_t _capacity;
     mutable std::mutex _mutex; // mutable to allow the const empty() and closed methods
@@ -18,7 +17,7 @@ private:
     bool _closed = false;
 
 public:
-    explicit BlockingQueue(size_t capacity) : _capacity(capacity) {}
+    explicit BlockingQueue(const size_t capacity) : _capacity(capacity) {}
 
     /// @brief Add to queue, if not full or closed.
     /// @param item 

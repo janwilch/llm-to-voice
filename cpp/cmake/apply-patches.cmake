@@ -14,7 +14,7 @@
 #
 # Editing a patch in place is the one case this cannot handle — the old version
 # is already applied, so the new one neither applies nor reverses. Delete
-# bin/_deps/llama_cpp-* and reconfigure after changing one.
+# _deps/llama_cpp-* in the build directory and reconfigure after changing one.
 
 file(GLOB patches "${PATCH_DIR}/*.patch")
 list(SORT patches)

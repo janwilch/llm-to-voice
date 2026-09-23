@@ -4,7 +4,7 @@
 
 #include "llmvoice.h"
 
-int main(int argc, char** argv) {
+int main(const int argc, char** argv) {
     CLI::App app("llmvoice - LLM chat to speech pipeline");
     app.require_subcommand(1);
 
@@ -27,15 +27,15 @@ int main(int argc, char** argv) {
     CLI11_PARSE(app, argc, argv);
 
     // -------------- set up & run the backend --------------
-    std::string llmModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf";
-    std::string talkerModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-voicedesign-Q4_K_M.gguf";
-    std::string codecModel  = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-tokenizer-12hz-Q4_K_M.gguf";
+    const std::string llmModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf";
+    const std::string talkerModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-voicedesign-Q4_K_M.gguf";
+    const std::string codecModel  = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-tokenizer-12hz-Q4_K_M.gguf";
 
-    LlmvoiceConfig config {
-        llmModel.c_str(),
-        8192,
-        talkerModel.c_str(),
-        codecModel.c_str()
+    const LlmvoiceConfig config {
+        .llmModelPath = llmModel.c_str(),
+        .llmContextSize = 8192,
+        .ttsTalkerPath = talkerModel.c_str(),
+        .ttsCodecPath = codecModel.c_str()
     };
 
     LlmvoiceHandle* handle = llmvoiceCreate(&config);
@@ -43,18 +43,20 @@ int main(int argc, char** argv) {
 
     if (*llmOnly) {
         llmvoiceCreateLlmContext(handle, "default");
-        llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter, noThink);
-    } else if (*ttsOnly) {
+        llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter, noThink, 1024);
+    }
+    else if (*ttsOnly) {
         // TODO
-    } else {
+    }
+    else {
         // TODO - full pipeline
     }
 
-    int32_t llmBufferSize = 64;
     std::string llmBuffer(64, '\0');
     
     while (!llmvoiceIsDone(handle)) {
-        int written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
+        constexpr int32_t llmBufferSize = 64;
+        const size_t written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
         std::println("{}", std::string_view(llmBuffer.data(), written));
         // TODO - TTS polling
     }

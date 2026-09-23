@@ -20,7 +20,6 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(CLI11)
-FetchContent_MakeAvailable(CLI11)
 
 # --- One ggml for the whole process -------------------------------------------
 #
@@ -90,6 +89,11 @@ FetchContent_Declare(
                    -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches/ggml
                    -DPATCH_ROOT=ggml
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply-patches.cmake
+        COMMAND  ${CMAKE_COMMAND}
+                   -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+                   -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches/llama
+                   -DPATCH_ROOT=.
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/apply-patches.cmake
   SOURCE_SUBDIR  _populate_only
 )
 
@@ -158,19 +162,36 @@ target_compile_definitions(
     QWEN_DEFAULT_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../models"
 )
 
+# --- Test dependencies --------------------------------------------------------
+#
+# Declared here, not up with CLI11, so Catch2 inherits the static/PIC settings
+# above. Nothing outside tests/ links it: llmvoice_cpp never sees Catch2.
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.16.0
+)
+
+FetchContent_MakeAvailable(Catch2)
+
+# catch_discover_tests() ships in Catch2's extras/, which is not on the module
+# path by default. The variable is the lowercased declared name.
+list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+include(Catch)
+
 enable_testing()
 
 # Links libllama and qwen-core into one binary and checks they share one ggml
 # with one GGML_MAX_NAME. If this builds and passes, the collision is solved.
 add_executable(deps_smoke tests/deps_smoke.cpp)
-target_link_libraries(deps_smoke PRIVATE llama qwen-core)
-add_test(NAME deps_smoke COMMAND deps_smoke)
+target_link_libraries(deps_smoke PRIVATE llama qwen-core Catch2::Catch2WithMain)
+catch_discover_tests(deps_smoke)
 
 # The segmenter is header-only and touches no model, so this links nothing but
 # a thread library and runs in milliseconds.
 add_executable(segmenter_test tests/segmenter_test.cpp)
-target_link_libraries(segmenter_test PRIVATE Threads::Threads)
-add_test(NAME segmenter_test COMMAND segmenter_test)
+target_link_libraries(segmenter_test PRIVATE Threads::Threads Catch2::Catch2WithMain)
+catch_discover_tests(segmenter_test)
 
 message(STATUS "llama.cpp   vendored at ${llama_cpp_SOURCE_DIR}")
 message(STATUS "qwentts.cpp vendored at ${qwentts_cpp_SOURCE_DIR}")

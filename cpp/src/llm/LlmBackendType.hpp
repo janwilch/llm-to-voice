@@ -8,7 +8,7 @@ enum class LlmBackendType {
     Fake
 };
 
-inline std::string to_string(LlmBackendType backend) {
+inline std::string to_string(const LlmBackendType backend) {
     switch (backend) {
         case LlmBackendType::None:
             return "none";

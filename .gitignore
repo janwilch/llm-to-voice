@@ -6,10 +6,8 @@ __pycache__/
 .pytest_cache/
 
 # Editor
-.idea/
-
-# C++
-/cpp/bin/
+.idea/*
+!.idea/runConfigurations/
 
 # Project
 models/
