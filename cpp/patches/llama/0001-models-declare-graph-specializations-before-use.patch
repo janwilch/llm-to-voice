@@ -1,0 +1,45 @@
+diff --git a/src/models/dflash.cpp b/src/models/dflash.cpp
+index da84f30b6..0c82bd619 100644
+--- a/src/models/dflash.cpp
++++ b/src/models/dflash.cpp
+@@ -240,6 +240,10 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
+     }
+ }
+ 
++// Declared before build_arch_graph instantiates them; clang rejects specializing afterwards.
++template <> llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
++template <> llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
++
+ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const llm_graph_params & params) const {
+     switch (params.gtype) {
+         case LLM_GRAPH_TYPE_ENCODER:
+diff --git a/src/models/eagle3.cpp b/src/models/eagle3.cpp
+index be466056d..67120f534 100644
+--- a/src/models/eagle3.cpp
++++ b/src/models/eagle3.cpp
+@@ -100,6 +100,10 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
+     }
+ }
+ 
++// Declared before build_arch_graph instantiates them; clang rejects specializing afterwards.
++template <> llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
++template <> llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
++
+ std::unique_ptr<llm_graph_context> llama_model_eagle3::build_arch_graph(const llm_graph_params & params) const {
+     switch (params.gtype) {
+         case LLM_GRAPH_TYPE_ENCODER:
+diff --git a/src/models/t5.cpp b/src/models/t5.cpp
+index b0e3f0625..d78289b8c 100644
+--- a/src/models/t5.cpp
++++ b/src/models/t5.cpp
+@@ -106,6 +106,10 @@ void llama_model_t5::load_arch_tensors(llama_model_loader &) {
+     }
+ }
+ 
++// Declared before build_arch_graph instantiates them; clang rejects specializing afterwards.
++template <> llama_model_t5::graph<true>::graph(const llama_model & model, const llm_graph_params & params);
++template <> llama_model_t5::graph<false>::graph(const llama_model & model, const llm_graph_params & params);
++
+ std::unique_ptr<llm_graph_context> llama_model_t5::build_arch_graph(const llm_graph_params & params) const {
+     switch (params.gtype) {
+         case LLM_GRAPH_TYPE_ENCODER:

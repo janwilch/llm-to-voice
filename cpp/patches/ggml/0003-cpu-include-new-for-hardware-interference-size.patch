@@ -1,0 +1,15 @@
+diff --git a/src/ggml-cpu/ops.h b/src/ggml-cpu/ops.h
+index ce2b3e870..5d333f8a8 100644
+--- a/src/ggml-cpu/ops.h
++++ b/src/ggml-cpu/ops.h
+@@ -2,6 +2,10 @@
+ 
+ #include "ggml.h"
+ 
++#ifdef __cplusplus
++#include <new> // std::hardware_destructive_interference_size, not pulled in transitively by libc++
++#endif
++
+ //
+ // cache line
+ //
