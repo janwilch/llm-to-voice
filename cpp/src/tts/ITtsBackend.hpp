@@ -1,8 +1,8 @@
 #pragma once
 
+#include "../threading/SpscRingBuffer.hpp"
+
 #include <string>
-#include <vector>
-#include "../threading/BlockingQueue.hpp"
 
 class ITtsBackend {
 public:
@@ -16,10 +16,10 @@ public:
     /// @brief Runs a synthesis without returning anything.
     virtual void warmup() = 0;
 
-    /// @brief Runs a streaming synthesis, writing audio chunks to the queue.
+    /// @brief Runs a streaming synthesis, writing audio chunks to the ring buffer.
     /// @param text The text to speak.
-    /// @param queue Receives generated synthesis chunks. NOTE: Closed after synthesis!
-    virtual void synthesizeToQueue(const std::string& text, BlockingQueue<std::vector<float>>& queue) = 0;
+    /// @param buffer Receives generated synthesis chunks.
+    virtual void synthesizeToBuffer(const std::string& text, SpscRingBuffer<float>& buffer) = 0;
 
     /// @brief Cancels a running synthesis.
     virtual void cancel() = 0;

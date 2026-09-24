@@ -45,8 +45,8 @@ public:
         return true;
     }
 
-    /// @brief Remove from queue if not empty or closed.
-    /// @return 
+    /// @brief Remove from queue if not empty or closed. BLOCKING.
+    /// @return An item.
     std::optional<T> pop() {
         std::unique_lock lock(_mutex);
 
@@ -65,6 +65,22 @@ public:
         lock.unlock();
         _notFull.notify_one();
         return item;
+    }
+
+    /// @brief Remove from the current queue if not empty or closed. NON-BLOCKING.
+    /// @return True if an item was removed.
+    bool tryPop(T& item) {
+        std::lock_guard lock(_mutex);
+
+        if (_items.empty()) {
+            return false;
+        }
+
+        item = std::move(_items.front());
+        _items.pop_front();
+
+        _notFull.notify_one();
+        return true;
     }
 
     /// @brief Close the queue, unlocking all waiting threads.

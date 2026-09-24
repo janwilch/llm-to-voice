@@ -1,8 +1,12 @@
 #include "Qwen3TtsBackend.hpp"
 #include "ITtsBackend.hpp"
 #include "qwen.h"
+
+#include "../threading/SpscRingBuffer.hpp"
+
 #include <format>
 #include <mutex>
+#include <thread>
 
 namespace {
 class Qwen3TtsBackend : public ITtsBackend {
@@ -12,7 +16,7 @@ class Qwen3TtsBackend : public ITtsBackend {
     // One handle per loaded talker+codec GGUF pair. Aggregates talker LM weights, code predictor MTP head, optional speaker encoder, the 12Hz codec, the BPE tokenizer, and the GGML backend pair.
     qt_context* _context;
     std::mutex _mutex;
-    bool _cancelled = false;
+    std::atomic<bool> _cancelled = { false };
 
 public:
     Qwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath) {
@@ -50,29 +54,43 @@ public:
         qt_audio_free(&out);
     }
 
-    /// @copydoc ITtsBackend::synthesizeToQueue
-    void synthesizeToQueue(const std::string& prompt, BlockingQueue<std::vector<float>>& queue) override {
-        {
-            std::lock_guard lock(_mutex);
-            _cancelled = false;
-        }
-
-        // since there is no `finally` we use this tmp object's destroyer to clean up
-        QueueCloser closer {queue};
+    /// @copydoc ITtsBackend::synthesizeToBuffer
+    void synthesizeToBuffer(const std::string& text, SpscRingBuffer<float>& buffer) override {
+        _cancelled.store(false);
 
         qt_tts_params params{};
         qt_tts_default_params(&params);
 
-        params.text = prompt.c_str();
+        params.text = text.c_str();
         params.seed = _seed;
         params.instruct = _instruct.c_str();
 
-        params.on_chunk_user_data = &queue;
+        struct UserData {
+            SpscRingBuffer<float>& b;
+            std::atomic<bool>& cancelled;
+        } workData {
+            .b = buffer,
+            .cancelled = _cancelled
+        };
+
+        params.on_chunk_user_data = &workData;
         params.on_chunk = [](const float* samples, const int n, void* userData) -> bool {
-            auto* queuePtr = static_cast<BlockingQueue<std::vector<float>>*>(userData);
-            // copy from first pointer target up to last (+n) pointer target into chunk
-            queuePtr->push(std::vector(samples, samples+n));
-            return true;    // false cancels further synthesis
+            const auto* work = static_cast<UserData*>(userData);
+
+            size_t done = 0;
+            while (done < static_cast<size_t>(n)) {
+                if (work->cancelled.load()) {
+                    return false; // stop synthesis
+                }
+
+                done += work->b.write(samples + done, n - done);
+                if (done < static_cast<size_t>(n)) {
+                    // TTS doesn't need to run in real-time - sleep while buffer is full
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+            }
+
+            return true;
         };
 
         params.cancel_user_data = this;
@@ -93,8 +111,7 @@ public:
 
     /// @copydoc ITtsBackend::cancel
     void cancel() override {
-        std::lock_guard lock(_mutex);
-        _cancelled = true;
+        _cancelled.store(true);
     }
 };
 }
