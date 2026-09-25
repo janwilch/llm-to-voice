@@ -9,8 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# CMake Tools reads this to drive IntelliSense in cpptools (see
-# C_Cpp.default.configurationProvider in ../.vscode/settings.json).
+# compile_commands.json, for clangd and other tooling outside CLion.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Git REQUIRED)
@@ -35,13 +34,14 @@ FetchContent_MakeAvailable(CLI11)
 # ggml.dll loaded first (the loader matches DLLs by name) and Linux lets one
 # copy's exported symbols interpose the other's. Even kept fully private
 # inside two separate DLLs, it would still mean two GPU contexts, when sharing
-# one runtime between the LLM and the TTS is the point (../docs/native-port.md).
+# one runtime between the LLM and the TTS is the point.
 # So there is exactly one ggml, and both link it.
 #
 # Which one: llama.cpp's, plus the two patches qwentts.cpp's ggml fork carries
-# on top of upstream (patches/ggml/). llama.cpp is where ggml development
-# happens, so its copy is the newest; the fork is upstream + those two commits
-# and nothing else, verified against upstream's history rather than by diff.
+# on top of upstream (patches/ggml/0001, 0002). llama.cpp is where ggml
+# development happens, so its copy is the newest; the fork is upstream + those
+# two commits and nothing else, verified against upstream's history rather than
+# by diff. patches/ggml/0003 is our own clang build fix.
 
 # Static, position-independent: everything folds into one library for Unity,
 # so there is no separate ggml.dll for another native plugin to clash with, and
@@ -79,7 +79,8 @@ endif()
 # --- Vendored dependencies ----------------------------------------------------
 #
 # Pinned to exact commits, not moving branches. Bump a GIT_TAG only
-# deliberately; ../docs/native-port.md lists what to re-check when you do.
+# deliberately, and re-check that the patches still apply and that the notes
+# on each dependency below still hold.
 #
 # SOURCE_SUBDIR names a directory that does not exist, which makes
 # FetchContent_MakeAvailable download and pin the source without calling

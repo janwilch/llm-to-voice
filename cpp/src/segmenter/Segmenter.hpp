@@ -18,7 +18,7 @@ struct SegmenterConfig {
     size_t coalesceMinChars = 60;
 };
 
-/// @brief Turns a stream of raw LLM token pieces into speakable segments: reassembles UTF-8, drops `<think>` blocks, splits on sentence ends, and merges the result up to `coalesceMinChars`.
+/// @brief Turns a stream of raw LLM token pieces into speakable segments: reassembles UTF-8, drops emoji and `<think>` blocks, splits on sentence ends, and merges the result up to `coalesceMinChars`.
 class Segmenter {
     /// @brief Raw bytes from llama, possibly ending mid-character.
     std::string _bytes;
@@ -70,6 +70,23 @@ class Segmenter {
         return 0;
     }
 
+    /// @brief Emoji and their invisible glue characters, which TTS cannot speak. A byte-range check, not the full Unicode `Extended_Pictographic` property.
+    static bool isEmoji(const std::string_view c) {
+        if (c.size() == 4) {
+            return c.starts_with("\xF0\x9F"); // U+1F000..1FFFF: nearly all emoji, incl. skin tones and flags
+        }
+
+        if (c.size() == 3) {
+            const auto second = static_cast<unsigned char>(c[1]);
+            return (c[0] == '\xE2' && second >= 0x98 && second <= 0x9E) // U+2600..27BF: ☀ ❤ ✅ ✨
+                || c == "\xEF\xB8\x8F"  // U+FE0F variation selector
+                || c == "\xE2\x80\x8D"  // U+200D zero-width joiner
+                || c == "\xE2\x83\xA3"; // U+20E3 keycap
+        }
+
+        return false;
+    }
+
     /// @brief Pieces from llama are raw UTF8 *bytes*. A single piece is not always a valid UTF8 character because some take multiple bytes. This method checks received bytes and accumulates them only as valid UTF8 characters.
     void accumulateUtf8Pieces() {
         size_t pos = 0;
@@ -105,7 +122,10 @@ class Segmenter {
             }
 
             reportBadBytes();
-            _utf8.append(_bytes, pos, expectedBytes);
+            if (!isEmoji(std::string_view(_bytes).substr(pos, expectedBytes))) {
+                _utf8.append(_bytes, pos, expectedBytes);
+            }
+
             pos += expectedBytes;
         }
 

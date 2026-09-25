@@ -244,13 +244,49 @@ TEST_CASE("the result is independent of chunk size", "[segmenter][think]") {
 }
 
 TEST_CASE("a 4-byte character split across pieces is reassembled", "[segmenter][utf8]") {
-    // U+1F600, four bytes: split at each of its three interior boundaries
-    const std::string emoji = "\xF0\x9F\x98\x80";
+    // U+20000 (a CJK ideograph, not an emoji), four bytes: split at each of its three interior boundaries
+    const std::string character = "\xF0\xA0\x80\x80";
     const size_t cut = GENERATE(range(1uz, 4uz));
     CAPTURE(cut);
 
-    CHECK(run({ "hi " + emoji.substr(0, cut), emoji.substr(cut) + " there. " }, splitOnly)
-          == Segments{"hi " + emoji + " there."});
+    CHECK(run({ "hi " + character.substr(0, cut), character.substr(cut) + " there. " }, splitOnly)
+          == Segments{"hi " + character + " there."});
+}
+
+TEST_CASE("emoji filtering", "[segmenter][emoji]") {
+    auto [name, pieces, expected] = GENERATE(table<std::string_view, Segments, Segments>({
+        {"an emoji is dropped, its surrounding spaces are not",
+         {"Great \xF0\x9F\x8E\x89 thanks. "},
+         {"Great  thanks."}},
+
+        {"an emoji split across pieces is dropped",
+         {"Done! \xF0\x9F", "\x98\x80"},
+         {"Done!"}},
+
+        {"a ZWJ sequence leaves nothing behind", // 👨‍👩‍👧
+         {"Family: \xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7."},
+         {"Family: ."}},
+
+        {"symbol-block emoji and their variation selector are dropped", // ❤️ ✅
+         {"Love it\xE2\x9D\xA4\xEF\xB8\x8F\xE2\x9C\x85. "},
+         {"Love it."}},
+
+        {"a keycap keeps its digit", // 1️⃣
+         {"Step 1\xEF\xB8\x8F\xE2\x83\xA3 done. "},
+         {"Step 1 done."}},
+
+        {"an emoji-only line yields no segment",
+         {"Hello there.\n\xF0\x9F\x8E\x89\n"},
+         {"Hello there."}},
+
+        {"non-emoji symbols are kept",
+         {"Caf\xC3\xA9 costs \xE2\x82\xAC""5 \xE2\x80\x94 cheap. "},
+         {"Caf\xC3\xA9 costs \xE2\x82\xAC""5 \xE2\x80\x94 cheap."}},
+    }));
+
+    INFO(name);
+    CAPTURE(pieces);
+    CHECK(run(pieces, splitOnly) == expected);
 }
 
 TEST_CASE("UTF-8 reassembly", "[segmenter][utf8]") {

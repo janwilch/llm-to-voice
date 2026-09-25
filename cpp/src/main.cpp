@@ -76,6 +76,8 @@ int main(const int argc, char** argv) {
         throw std::runtime_error(std::format("llmvoiceCreate failed: {}", llmvoiceLastError()));
     }
 
+    llmvoiceSetSegmenterConfig(handle, 24, 200);
+
     if (llmvoiceWarmup(handle) != 0) {
         throw std::runtime_error(std::format("llmvoiceWarmup failed: {}", llmvoiceLastError()));
     }
@@ -102,7 +104,7 @@ int main(const int argc, char** argv) {
         }
     }
 
-    // -------------- audio output --------------
+    // -------------- (audio) output --------------
     // started only after submitting: before that there is no session to poll
     const bool playAudio = !*llmOnly && !noAudio;
     ma_device device {};

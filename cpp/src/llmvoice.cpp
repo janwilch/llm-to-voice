@@ -61,6 +61,8 @@ struct LlmvoiceHandle {
     std::unique_ptr<ILlmBackend> llmBackend;
     std::unique_ptr<ITtsBackend> ttsBackend;
 
+    SegmenterConfig segmenterConfig;
+
     std::unique_ptr<PipelineSession> session;
 };
 
@@ -168,10 +170,11 @@ static PipelineSession* beginSession(LlmvoiceHandle* handle) {
 
 /// @brief Starts the segmenter worker, which turns the session's LLM tokens into segments pushed to `outQueue`.
 static std::jthread startSegmenter(LlmvoiceHandle* handle, PipelineSession* session, BlockingQueue<std::string>& outQueue) {
-    return startWorker(session, "segmentation", [handle, session, &outQueue] {
+    // copied, so a later llmvoiceSetSegmenterConfig does not race this session
+    return startWorker(session, "segmentation", [handle, session, &outQueue, config = handle->segmenterConfig] {
         try {
             Segmenter segmenter;
-            segmenter.segment(session->llmTokenQueue, outQueue);
+            segmenter.segment(session->llmTokenQueue, outQueue, config);
         }
         catch (...) {
             // nobody drains the token queue anymore: stop the LLM instead of letting it block on a full queue
@@ -223,6 +226,13 @@ int llmvoiceCreateTtsContext(const LlmvoiceHandle* handle, const int64_t seed, c
     return guarded([&] {
         handle->ttsBackend->createFreshContext(seed, instructUtf8);
     }) ? 0 : 1;
+}
+
+void llmvoiceSetSegmenterConfig(LlmvoiceHandle* handle, const size_t minSentenceLength, const size_t coalesceMinChars) {
+    handle->segmenterConfig = {
+        .minSentenceLength = minSentenceLength,
+        .coalesceMinChars = coalesceMinChars
+    };
 }
 
 int llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, const bool noThink, const int maxTokens) {
