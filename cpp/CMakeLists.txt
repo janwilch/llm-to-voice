@@ -4,6 +4,11 @@ project(llmvoice_cpp C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Windows finds a DLL only next to the .exe that loads it, so the llmvoice
+# library and the CLI share one output directory on every platform.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # CMake Tools reads this to drive IntelliSense in cpptools (see
 # C_Cpp.default.configurationProvider in ../.vscode/settings.json).
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -163,12 +168,35 @@ target_link_libraries(llmvoice-audio PUBLIC vendor::miniaudio Threads::Threads $
     $<$<NOT:$<PLATFORM_ID:Windows>>:m>
 )
 
-add_executable(llmvoice_cpp src/main.cpp
-  src/tts/Qwen3TtsBackend.cpp
-  src/llm/Qwen3Backend.cpp
-  src/llmvoice.cpp)
+# Native plugin: the C ABI in llmvoice.h plus both backends. llama,
+# qwen-core and ggml are static + PIC, all in this one shared
+# library (.so / .dll / .dylib).
+add_library(llmvoice SHARED
+    src/llmvoice.cpp
+    src/llm/Qwen3Backend.cpp
+    src/tts/Qwen3TtsBackend.cpp
+)
+target_include_directories(llmvoice PUBLIC src)
+# PRIVATE: llama and ggml are implementation details; consumers see llmvoice.h only.
+target_link_libraries(llmvoice PRIVATE llama qwen-core Threads::Threads)
+target_compile_definitions(llmvoice PRIVATE LLMVOICE_BUILDING)
+# Export only what llmvoice.h marks LLMVOICE_API, so no ggml_* / llama_* symbol
+# leaks out to interpose on another plugin's copy (see the ggml note above).
+# The presets cover our own sources; the static archives were compiled with
+# default visibility, so on ELF their symbols are stripped from the export
+# table at link time instead. Windows exports nothing unmarked anyway.
+set_target_properties(llmvoice PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+target_link_options(llmvoice PRIVATE
+    $<$<PLATFORM_ID:Linux,FreeBSD,Android>:LINKER:--exclude-libs,ALL>
+)
 
-target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 llama qwen-core llmvoice-audio)
+add_executable(llmvoice_cpp src/main.cpp)
+
+target_link_libraries(llmvoice_cpp PRIVATE llmvoice CLI11::CLI11 llmvoice-audio)
 
 target_compile_definitions(
     llmvoice_cpp PRIVATE
