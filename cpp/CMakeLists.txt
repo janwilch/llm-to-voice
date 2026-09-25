@@ -150,12 +150,25 @@ target_link_libraries(qwen-core PUBLIC ggml Threads::Threads)
 
 # --- Our targets --------------------------------------------------------------
 
+# Audio output for the CLI only; in typical library usage, the client app owns the audio device.
+# llama.cpp already vendors miniaudio.h (only compiled via the mtmd multimodal option)
+# We take that miniaudio.h and compile it here
+add_library(llmvoice-audio STATIC src/audio/miniaudio.c)
+target_compile_definitions(llmvoice-audio PUBLIC
+    MA_NO_DECODING MA_NO_ENCODING MA_NO_GENERATION
+    MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER
+)
+# dlopen backends (PipeWire/PulseAudio/ALSA, ...) at runtime
+target_link_libraries(llmvoice-audio PUBLIC vendor::miniaudio Threads::Threads ${CMAKE_DL_LIBS}
+    $<$<NOT:$<PLATFORM_ID:Windows>>:m>
+)
+
 add_executable(llmvoice_cpp src/main.cpp
   src/tts/Qwen3TtsBackend.cpp
   src/llm/Qwen3Backend.cpp
   src/llmvoice.cpp)
 
-target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 llama qwen-core)
+target_link_libraries(llmvoice_cpp PRIVATE CLI11::CLI11 llama qwen-core llmvoice-audio)
 
 target_compile_definitions(
     llmvoice_cpp PRIVATE

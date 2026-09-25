@@ -46,18 +46,23 @@ public:
     void warmup() override {
         qt_tts_params params{};
         qt_tts_default_params(&params);
-        params.text = "warmup";
-        params.instruct = "default";
+        params.text = "This is a short warmup sentence. It is long enough to produce several chunks of audio.";
+        params.instruct = "A calm, neutral voice.";
+
+        // non-null on_chunk selects the streaming pipeline, same as synthesizeToBuffer
+        params.on_chunk = [](const float*, int, void*) -> bool { return true; };
 
         qt_audio out = {.samples = nullptr};
-        qt_synthesize(_context, &params, &out);
+        const qt_status status = qt_synthesize(_context, &params, &out);
         qt_audio_free(&out);
+
+        if (status != QT_STATUS_OK) {
+            throw std::runtime_error(std::format("warmup qt_synthesize failed: {}", qt_last_error()));
+        }
     }
 
     /// @copydoc ITtsBackend::synthesizeToBuffer
     void synthesizeToBuffer(const std::string& text, SpscRingBuffer<float>& buffer) override {
-        _cancelled.store(false);
-
         qt_tts_params params{};
         qt_tts_default_params(&params);
 
@@ -112,6 +117,11 @@ public:
     /// @copydoc ITtsBackend::cancel
     void cancel() override {
         _cancelled.store(true);
+    }
+
+    /// @copydoc ITtsBackend::resetCancel
+    void resetCancel() override {
+        _cancelled.store(false);
     }
 };
 }

@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #define LLMVOICE_PCM_SAMPLE_RATE 24000
+#define DEFAULT_QUEUE_CAPA 64
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,7 +17,7 @@ typedef struct LlmvoiceHandle LlmvoiceHandle;
 typedef struct {
     const char* llmModelPath;
     int llmContextSize;
-    
+
     const char* ttsTalkerPath;
     const char* ttsCodecPath;
 } LlmvoiceConfig;
@@ -40,7 +41,9 @@ int llmvoiceCreateLlmContext(const LlmvoiceHandle*, const char* systemPromptUtf8
 int llmvoiceCreateTtsContext(const LlmvoiceHandle*, int64_t seed, const char* instructUtf8);
 
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
-void llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink);
+/// Both `pollText` and `pollPcm` must be polled: if DEFAULT_QUEUE_CAPA segments of text are unread, TTS stalls until `pollText` is called.
+/// @return 0 on success, non-0 otherwise.
+int llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink, int maxTokens);
 
 /// @brief Submit a prompt to run only through the LLM and optionally the segmenter.
 /// Only `pollText` will yield output.
@@ -50,7 +53,7 @@ int llmvoiceSubmitLlm(LlmvoiceHandle*, const char* promptUtf8, bool segment, boo
 /// @brief Submit a text to run only through TTS.
 /// Only `pollPcm` will yield output.
 /// @return 0 on success, non-0 otherwise.
-int llmvoiceSubmitTts(LlmvoiceHandle*, const char* textUtf8, bool audio);
+int llmvoiceSubmitTts(LlmvoiceHandle*, const char* textUtf8);
 
 /// @brief Cancel all running generation.
 void llmvoiceCancel(LlmvoiceHandle*);

@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="llm-only (segmented) --no-think" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="-p &quot;Tell me a brief story about your childhood days&quot; --no-think llm-only" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="llmvoice_cpp" TARGET_NAME="llmvoice_cpp" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="llmvoice_cpp" RUN_TARGET_NAME="llmvoice_cpp">
+  <configuration default="false" name="llm-only (segmented) --no-think" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="-p &quot;Tell me a very short story about your childhood days&quot; --no-think llm-only" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="llmvoice_cpp" TARGET_NAME="llmvoice_cpp" CONFIG_NAME="debug" RUN_TARGET_PROJECT_NAME="llmvoice_cpp" RUN_TARGET_NAME="llmvoice_cpp">
     <method v="2">
       <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
     </method>

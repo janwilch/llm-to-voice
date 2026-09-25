@@ -319,7 +319,6 @@ public:
         _history.emplace_back("system", systemPrompt);
 
         decodeAllHistory(false); // prefill the system prompt cache
-        _cancelled = false;
     }
 
     /// @copydoc ILlmBackend::warmup
@@ -329,27 +328,58 @@ public:
         struct Raii {
             decltype(_context)& context;
             decltype(_sampler)& sampler;
-            decltype(_kvUnknown) kvUnknown;
+            decltype(_committed)& committed;
+            decltype(_kvUnknown)& kvUnknown;
 
             ~Raii() {
                 llama_memory_clear(llama_get_memory(context.get()), true);
                 llama_sampler_reset(sampler.get());
+                committed.clear();
                 kvUnknown = true; // force rebuild next turn
             }
         } raii {
             .context = _context,
             .sampler = _sampler,
+            .committed = _committed,
             .kvUnknown = _kvUnknown
         };
 
-        decodeAllHistory(false);
+        llama_memory_clear(llama_get_memory(_context.get()), true);
+        _committed.clear();
+
+        // filler text, long enough for all chunks below
+        std::string filler;
+        for (int i = 0; i < 100; i++) {
+            filler += "The quick brown fox jumps over the lazy dog. ";
+        }
+        const std::vector<llama_token> fillerTokens = tokenize(filler, false);
+
+        // backends like Vulkan compile kernels lazily and pick different ones by batch size,
+        // e.g. mat-vec for single-token generation vs. differently tiled mat-mul for prefill - hit each size class once
+        size_t offset = 0;
+        for (const size_t chunkLen : { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 }) {
+            const size_t len = std::min({ chunkLen, static_cast<size_t>(_batchSize), fillerTokens.size() - offset });
+            if (len == 0) {
+                break;
+            }
+
+            const std::vector chunk(fillerTokens.begin() + offset, fillerTokens.begin() + offset + len);
+            if (!decode(chunk)) {
+                throw std::runtime_error("warmup decode failed");
+            }
+
+            _committed.insert(_committed.end(), chunk.begin(), chunk.end());
+            offset += len;
+        }
+
+        // exercise the sampler once too
+        llama_sampler_sample(_sampler.get(), _context.get(), -1);
     }
 
     /// @copydoc ILlmBackend::synthesizeToQueue
     void synthesizeToQueue(const std::string &prompt, BlockingQueue<std::string> &queue, const bool noThink, const int32_t maxTokens) override {
         std::lock_guard lock(_ctxMutex);
         QueueCloser closer { queue };
-        _cancelled = false;
 
         _history.emplace_back("user", prompt);
 
@@ -388,6 +418,9 @@ public:
 
     /// @copydoc ILlmBackend::cancel
     void cancel() override { _cancelled = true; }
+
+    /// @copydoc ILlmBackend::resetCancel
+    void resetCancel() override { _cancelled = false; }
 };}
 
 std::unique_ptr<ILlmBackend> createQwen3Backend(const std::string &modelPath, int32_t contextSize) {

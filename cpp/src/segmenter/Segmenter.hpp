@@ -13,12 +13,8 @@
 #include <string_view>
 #include <utility>
 
-/// @brief Tuned by ear in the Python prototype (`py/src/llmvoice/config.py`); the numbers are not recoverable from the code.
 struct SegmenterConfig {
-    /// @brief Floor before coalescing gets involved, so a lone "Yes." never becomes a segment of its own.
     size_t minSentenceLength = 24;
-
-    /// @brief Every segment is an independent TTS generation and VoiceDesign redraws the speaker for each one, so short segments drift audibly in voice identity. Merging up to this many characters buys that back; it is also the whole time-to-first-audio cost. 0 disables coalescing.
     size_t coalesceMinChars = 60;
 };
 
@@ -92,7 +88,7 @@ class Segmenter {
                 break; // incomplete character, wait for more bytes
             }
 
-            // a lead byte alone proves nothing: every byte after it must be a continuation (10xxxxxx)
+            // every byte after a lead byte must be a continuation (10xxxxxx)
             bool complete = true;
             for (size_t i = 1; i < expectedBytes; ++i) {
                 if ((static_cast<unsigned char>(_bytes[pos + i]) & 0xC0) != 0x80) {
@@ -137,7 +133,7 @@ class Segmenter {
             const size_t markerIdx = _utf8.find(marker);
 
             if (markerIdx == std::string::npos) {
-                // hold back only what could still become the marker; everything before it is decided
+                // hold back what could still become the marker
                 const size_t held = heldPrefixLength(_utf8, marker);
                 if (!_inThink) {
                     _text.append(_utf8, 0, _utf8.size() - held);
@@ -156,7 +152,7 @@ class Segmenter {
         }
     }
 
-    /// @brief Checks (case-insensitively) whether `abbreviation` is exactly the text ending at `_text[candidate]`, as a whole word — without that, "FT." also matches the tail of "left." and "ED." the tail of "jumped.".
+    /// @brief Checks (case-insensitively) whether `abbreviation` is the text ending at `_text[candidate]`
     [[nodiscard]] bool matchesAbbreviationAt(const size_t candidate, std::string_view abbreviation) const {
         if (candidate + 1 < abbreviation.size()) {
             return false; // not enough preceding characters to fit the abbreviation
@@ -175,8 +171,7 @@ class Segmenter {
 
     /// @brief Checks some hard-coded abbreviations that take a period without ending a sentence.
     [[nodiscard]] bool isAbbreviation(const size_t candidate) const {
-        // single letters are deliberately absent: `isSingleLetterInitial` already covers the capitalised
-        // case, and "M." / "G." / "L." cost more in false positives than "5 m." is worth
+        // single letters are covered by `isSingleLetterInitial`
         static constexpr std::array abbreviations {
             // titles
             "MR.", "MRS.", "MS.", "MX.", "DR.", "PROF.", "SR.", "JR.", "ST.", "REV.",
@@ -206,7 +201,7 @@ class Segmenter {
         });
     }
 
-    /// @brief Checks whether `candidate` is a period directly preceded by a single, isolated capital letter (an initial, e.g. "J." in "J. K. Rowling")
+    /// @brief Checks whether `candidate` is a period directly preceded by a single, isolated capital letter (an initial, e.g. "J." in "J. Wilch")
     [[nodiscard]] bool isSingleLetterInitial(const size_t candidate) const {
         if (candidate < 1) {
             return false;
@@ -216,7 +211,6 @@ class Segmenter {
             return false;
         }
 
-        // must not be preceded by another letter, otherwise it's the tail of a longer word/acronym, not an isolated initial
         if (candidate >= 2 && std::isalpha(static_cast<unsigned char>(_text[candidate - 2]))) {
             return false;
         }
@@ -224,7 +218,7 @@ class Segmenter {
         return true;
     }
 
-    /// @brief Checks whether `candidate` is the period of a markdown list marker ("1. Open the door"). Restricted to the start of a line on purpose: anywhere else, "The answer is 42." has to keep ending a sentence.
+    /// @brief Checks whether `candidate` is the period of a markdown list marker ("1. Open the door")
     [[nodiscard]] bool isListMarker(const size_t candidate) const {
         size_t start = candidate;
         while (start > 0 && std::isdigit(static_cast<unsigned char>(_text[start - 1]))) {
@@ -242,7 +236,7 @@ class Segmenter {
         return start == 0 || _text[start - 1] == '\n';
     }
 
-    /// @brief Tries finding the proper ends of sentences (`.`, `!`, `?`, `…`, `\n` etc.) while *not* splitting on numbers (3.14) or common abbreviations (Mr., Mrs., Dr. etc.).
+    /// @brief Tries finding the proper ends of sentences (`.`, `!`, `?`, `…`, `\n` etc.)
     /// @return The index of the sentence's *last* byte, or npos if the buffer does not hold a complete sentence yet.
     size_t findSentenceEnd(const SegmenterConfig& config) {
         // the last byte of "…" (U+2026 = E2 80 A6) is in the set because find_first_of works on bytes and cannot see the character
@@ -276,7 +270,7 @@ class Segmenter {
                 return std::string::npos;
             }
 
-            // if the next char is not whitespace, it isn't a sentence end (this is what keeps "3.14" in one piece)
+            // if the next char is not whitespace, it isn't a sentence end
             if (!whitespace.contains(_text[candidate + 1])) {
                 ++candidate;
                 continue;
@@ -295,7 +289,7 @@ class Segmenter {
         return std::string::npos;
     }
 
-    /// @brief Trims ASCII whitespace from both ends. The result may be empty, in which case there is nothing worth speaking.
+    /// @brief Trims ASCII whitespace from both ends. The result may be empty.
     static std::string_view strip(const std::string_view text) {
         static constexpr std::string_view whitespace = " \t\r\n\f\v";
 
@@ -307,7 +301,7 @@ class Segmenter {
         return text.substr(first, text.find_last_not_of(whitespace) - first + 1);
     }
 
-    /// @brief Whether `text` already closes with punctuation of any kind, in which case nothing is added and what the model wrote is kept.
+    /// @brief Whether `text` already closes with punctuation.
     static bool endsWithPunctuation(const std::string_view text) {
         // "…", "–", "—" are multi-byte, so they cannot be checked as a single character
         for (const std::string_view suffix : { "\xE2\x80\xA6", "\xE2\x80\x93", "\xE2\x80\x94" }) {
@@ -321,7 +315,7 @@ class Segmenter {
         return !text.empty() && punctuation.contains(text.back());
     }
 
-    /// @brief Merges sentences until the segment is at least `coalesceMinChars` long, then pushes it. Fewer, longer segments means fewer VoiceDesign speaker draws and so less voice drift.
+    /// @brief Pushes sentences at least `coalesceMinChars` long.
     /// @return `false` if the consumer closed the queue.
     bool pushCoalesced(const std::string_view sentence, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig& config) {
         if (sentence.empty()) {
@@ -338,14 +332,13 @@ class Segmenter {
 
         _pending += sentence;
 
-        // lazy on purpose: yield as soon as the threshold is met, so buffering only ever delays
-        // segments that were too short to send anyway
+        // yield as soon as the threshold is met
         if (_pending.size() < config.coalesceMinChars) {
             return true;
         }
 
         const bool accepted = segmentsOutQueue.push(std::move(_pending));
-        _pending.clear(); // a moved-from string is valid but unspecified, not necessarily empty
+        _pending.clear();
         return accepted;
     }
 
@@ -377,16 +370,12 @@ class Segmenter {
         return true;
     }
 
-    /// @brief End of input: release every buffer, in order, so no speakable text is dropped.
+    /// @brief End of input: release every buffer.
     void flush(BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig& config) {
-        // a trailing incomplete sequence is malformed by definition; forwarding it would hand the TTS
-        // tokenizer invalid UTF-8
         _badByteRun += _bytes.size();
         _bytes.clear();
         reportBadBytes();
 
-        // release the think filter's held tail — but an unterminated block stays dropped, because a
-        // truncated or cancelled response must not leak its reasoning into the audio
         if (!_inThink) {
             _text += _utf8;
         }
@@ -397,7 +386,7 @@ class Segmenter {
             return;
         }
 
-        // whatever is left is the last segment, sentence end or not
+        // what is left is the last segment (not considering sentence end checks)
         if (
             const std::string_view tail = strip(_text);
             !tail.empty()
@@ -422,21 +411,20 @@ class Segmenter {
     }
 
 public:
-    /// @brief Pulls token pieces until the input queue closes, pushing speakable segments as they complete. Pull-driven, so it consumes LLM tokens only as fast as the consumer takes segments.
+    /// @brief Pulls token pieces until the input queue closes.
     void segment(BlockingQueue<std::string>& tokensInQueue, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig config = {}) {
         // the consumer blocks on pop(), so the output queue has to close on *every* exit path
         QueueCloser closer { segmentsOutQueue };
         reset();
 
-        // pop() returns nullopt only once the queue is closed *and* drained, which is exactly end of input
+        // pop() returns nullopt only once queue is closed *and* empty
         while (std::optional<std::string> piece = tokensInQueue.pop()) {
             _bytes += piece.value();
             accumulateUtf8Pieces();
             removeThinking();
 
             if (!emitSentences(segmentsOutQueue, config)) {
-                // the consumer closed the queue: barge-in. Buffered text is stale, so drop it rather
-                // than letting it become audio after the user interrupted
+                // the consumer closed the queue -> do nothing more
                 return;
             }
         }

@@ -1,15 +1,45 @@
 #include <CLI/CLI.hpp>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <miniaudio/miniaudio.h>
 #include <print>
 #include <string_view>
 #include <thread>
 
 #include "llmvoice.h"
 
+namespace {
+
+/// @brief Runs on miniaudio's audio thread, which makes it the PCM ring buffer's one consumer.
+/// Must not block: no locks, allocations or printing.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef - must match ma_device_data_proc
+void playbackCallback(ma_device* device, void* output, const void* /*input*/, const ma_uint32 frameCount) {
+    auto* handle = static_cast<LlmvoiceHandle*>(device->pUserData);
+    auto* out = static_cast<float*>(output);
+
+    // whatever TTS has not produced yet plays as silence
+    const size_t got = llmvoicePollPcm(handle, out, frameCount);
+    std::fill(out + got, out + frameCount, 0.0f);
+}
+
+} // namespace
+
+static void prepLlm(const LlmvoiceHandle* handle) {
+    if (llmvoiceCreateLlmContext(handle, "default") != 0) {
+        throw std::runtime_error(std::format("llmvoiceCreateLlmContext failed: {}", llmvoiceLastError()));
+    }
+}
+
+static void prepTts(const LlmvoiceHandle* handle) {
+    if (llmvoiceCreateTtsContext(handle, 42, "A mature woman with a warm and kind voice. It has a slight crackle and sounds happy. She sounds like Helen Mirren.") != 0) {
+        throw std::runtime_error(std::format("llmvoiceCreateTtsContext failed: {}", llmvoiceLastError()));
+    }
+}
+
 int main(const int argc, char** argv) {
     CLI::App app("llmvoice - LLM chat to speech pipeline");
-    app.require_subcommand(1);
+    app.require_subcommand(0);
 
     std::string prompt;
     app.add_option("--prompt,-p", prompt, "Prompt text")->required();
@@ -50,45 +80,89 @@ int main(const int argc, char** argv) {
         throw std::runtime_error(std::format("llmvoiceWarmup failed: {}", llmvoiceLastError()));
     }
 
-    if (*llmOnly) {
-        if (llmvoiceCreateLlmContext(handle, "default") != 0) {
-            throw std::runtime_error(std::format("llmvoiceCreateLlmContext failed: {}", llmvoiceLastError()));
-        }
+    std::println("{}", "fully warmed up");
 
+    if (*llmOnly) {
+        prepLlm(handle);
         if (llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter, noThink, 1024) != 0) {
             throw std::runtime_error(std::format("llmvoiceSubmitLlm failed: {}", llmvoiceLastError()));
         }
     }
     else if (*ttsOnly) {
-        // TODO
+        prepTts(handle);
+        if (llmvoiceSubmitTts(handle, prompt.c_str()) != 0) {
+            throw std::runtime_error(std::format("llmvoiceSubmitTts failed: {}", llmvoiceLastError()));
+        }
     }
     else {
-        // TODO - full pipeline
+        prepLlm(handle);
+        prepTts(handle);
+        if (llmvoiceSubmitPipeline(handle, prompt.c_str(), noThink, 1024) != 0) {
+            throw std::runtime_error(std::format("llmvoiceSubmitPipeline failed: {}", llmvoiceLastError()));
+        }
     }
 
-    std::string llmBuffer(64, '\0');
-    
-    while (!llmvoiceIsDone(handle)) {
-        constexpr int32_t llmBufferSize = 64;
-        const size_t written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
-        // TODO - TTS polling
+    // -------------- audio output --------------
+    // started only after submitting: before that there is no session to poll
+    const bool playAudio = !*llmOnly && !noAudio;
+    ma_device device {};
+    if (playAudio) {
+        ma_device_config deviceConfig = ma_device_config_init(ma_device_type_playback);
+        deviceConfig.playback.format = ma_format_f32;
+        deviceConfig.playback.channels = 1;
+        deviceConfig.sampleRate = LLMVOICE_PCM_SAMPLE_RATE; // miniaudio resamples if the device runs at another rate
+        deviceConfig.dataCallback = playbackCallback;
+        deviceConfig.pUserData = handle;
 
-        if (written == 0) {
+        if (const ma_result result = ma_device_init(nullptr, &deviceConfig, &device); result != MA_SUCCESS) {
+            throw std::runtime_error(std::format("ma_device_init failed: {}", ma_result_description(result)));
+        }
+
+        if (const ma_result result = ma_device_start(&device); result != MA_SUCCESS) {
+            ma_device_uninit(&device);
+            throw std::runtime_error(std::format("ma_device_start failed: {}", ma_result_description(result)));
+        }
+    }
+
+    constexpr int32_t llmBufferSize = 64;
+    std::string llmBuffer(llmBufferSize, '\0');
+
+    constexpr size_t ttsBufferSize = 64;
+    std::vector<float> ttsBuffer(ttsBufferSize);
+
+    while (!llmvoiceIsDone(handle)) {
+        const size_t written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
+        // with audio on, the playback callback is the only one allowed to read PCM
+        const size_t spoken = playAudio ? 0 : llmvoicePollPcm(handle, ttsBuffer.data(), ttsBufferSize);
+
+        if (written == 0 && spoken == 0) {
             // polling is non-blocking: wait a bit instead of spinning while nothing is ready
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
         // pieces are fragments of one text (segments are already joined with a space), so no newline in between
-        std::print("{}", std::string_view(llmBuffer.data(), written));
+        std::println("| {}", std::string_view(llmBuffer.data(), written));
+        std::println("| ({} PCM values)", spoken);
         std::fflush(stdout);
     }
     std::println();
 
+    if (playAudio) {
+        // done means the callback has taken all PCM out of the ring buffer, but the device's
+        // own buffer still holds up to (periods * period size) frames that have not been heard yet
+        const auto& playback = device.playback;
+        const auto tail = std::chrono::milliseconds(
+            1000ull * playback.internalPeriods * playback.internalPeriodSizeInFrames / playback.internalSampleRate);
+        std::this_thread::sleep_for(tail + std::chrono::milliseconds(50));
+
+        // before llmvoiceDestroy: the callback must not poll a destroyed handle
+        ma_device_uninit(&device);
+    }
+
     llmvoiceDestroy(handle);
 
-    const std::string error = llmvoiceLastError();
-    if (!error.empty()) {
+    if (const std::string error = llmvoiceLastError(); !error.empty()) {
         throw std::runtime_error(error);
     }
 

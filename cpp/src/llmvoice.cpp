@@ -24,12 +24,11 @@ constexpr size_t PCM_BUFFER_SECONDS = 30;
 
  // ReSharper disable once CppUseInternalLinkage
 struct PipelineSession {
-    BlockingQueue<std::string> llmTokenQueue { 64 };
-    BlockingQueue<std::string> segmentsToTtsQueue { 64 };
-    BlockingQueue<std::string> segmentsOutQueue { 64 };
+    BlockingQueue<std::string> llmTokenQueue { DEFAULT_QUEUE_CAPA };
+    BlockingQueue<std::string> segmentsToTtsQueue { DEFAULT_QUEUE_CAPA };
+    BlockingQueue<std::string> segmentsOutQueue { DEFAULT_QUEUE_CAPA };
 
     bool segment = false;
-    bool audio = false;
 
     std::string llmTextRemainder;
     bool llmTextStarted = false;
@@ -159,8 +158,28 @@ static PipelineSession* beginSession(LlmvoiceHandle* handle) {
         handle->session.reset();
     }
 
+    // no worker is running here, so no synthesis can race the reset
+    handle->llmBackend->resetCancel();
+    handle->ttsBackend->resetCancel();
+
     handle->session = std::make_unique<PipelineSession>();
     return handle->session.get();
+}
+
+/// @brief Starts the segmenter worker, which turns the session's LLM tokens into segments pushed to `outQueue`.
+static std::jthread startSegmenter(LlmvoiceHandle* handle, PipelineSession* session, BlockingQueue<std::string>& outQueue) {
+    return startWorker(session, "segmentation", [handle, session, &outQueue] {
+        try {
+            Segmenter segmenter;
+            segmenter.segment(session->llmTokenQueue, outQueue);
+        }
+        catch (...) {
+            // nobody drains the token queue anymore: stop the LLM instead of letting it block on a full queue
+            handle->llmBackend->cancel();
+            session->llmTokenQueue.close();
+            throw;
+        }
+    });
 }
 
 // -------------------- ABI implementation ---------------------
@@ -206,8 +225,50 @@ int llmvoiceCreateTtsContext(const LlmvoiceHandle* handle, const int64_t seed, c
     }) ? 0 : 1;
 }
 
-void llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, bool noThink) {
-    // TODO
+int llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, const bool noThink, const int maxTokens) {
+    if (promptUtf8 == nullptr) {
+        setError("prompt must not be null");
+        return 1;
+    }
+
+    const bool ok = guarded([&] {
+        PipelineSession* session = beginSession(handle);
+        session->segment = true;
+
+        try {
+            session->llmThread = startWorker(session, "LLM generation", [handle, session, prompt = std::string(promptUtf8), noThink, maxTokens] {
+                handle->llmBackend->synthesizeToQueue(prompt, session->llmTokenQueue, noThink, maxTokens);
+            });
+
+            session->segmentThread = startSegmenter(handle, session, session->segmentsToTtsQueue);
+
+            session->ttsThread = startWorker(session, "TTS", [handle, session] {
+                try {
+                    while (std::optional<std::string> next = session->segmentsToTtsQueue.pop()) {
+                        // speak and output the segment simultaneously (basically "closed captioning")
+                        if (!session->segmentsOutQueue.push(next.value())) {
+                            return; // closed = cancelled
+                        }
+
+                        handle->ttsBackend->synthesizeToBuffer(next.value(), session->pcmOut);
+                    }
+                }
+                catch (...) {
+                    // nobody drains the segments anymore: stop everything upstream instead of letting it block on full queues
+                    handle->llmBackend->cancel();
+                    session->llmTokenQueue.close();
+                    session->segmentsToTtsQueue.close();
+                    throw;
+                }
+            });
+        }
+        catch (...) {
+            cancelSession(handle);
+            throw;
+        }
+    });
+
+    return ok ? 0 : 1;
 }
 
  // ReSharper disable once CppUseInternalLinkage
@@ -223,18 +284,7 @@ int llmvoiceSubmitLlm(LlmvoiceHandle* handle, const char *promptUtf8, const bool
 
         try {
             if (segment) {
-                session->segmentThread = startWorker(session, "segmentation", [handle, session] {
-                    try {
-                        Segmenter segmenter;
-                        segmenter.segment(session->llmTokenQueue, session->segmentsOutQueue);
-                    }
-                    catch (...) {
-                        // nobody drains the token queue anymore: stop the LLM instead of letting it block on a full queue
-                        handle->llmBackend->cancel();
-                        session->llmTokenQueue.close();
-                        throw;
-                    }
-                });
+                session->segmentThread = startSegmenter(handle, session, session->segmentsOutQueue);
             }
 
             session->llmThread = startWorker(session, "LLM generation", [handle, session, prompt = std::string(promptUtf8), noThink, maxTokens] {
@@ -251,7 +301,7 @@ int llmvoiceSubmitLlm(LlmvoiceHandle* handle, const char *promptUtf8, const bool
     return ok ? 0 : 1;
 }
 
-int llmvoiceSubmitTts(LlmvoiceHandle* handle, const char *textUtf8, const bool audio) {
+int llmvoiceSubmitTts(LlmvoiceHandle* handle, const char *textUtf8) {
     if (textUtf8 == nullptr) {
         setError("text must not be null");
         return 1;
@@ -259,7 +309,6 @@ int llmvoiceSubmitTts(LlmvoiceHandle* handle, const char *textUtf8, const bool a
 
     const bool ok = guarded([&] {
         PipelineSession* session = beginSession(handle);
-        session->audio = audio;
 
         try {
             session->ttsThread = startWorker(session, "TTS", [handle, session, text = std::string(textUtf8)] {
@@ -335,6 +384,7 @@ size_t llmvoicePollPcm(LlmvoiceHandle* handle, float* dst, const size_t maxFrame
 }
 
  // ReSharper disable once CppUseInternalLinkage
+ // ReSharper disable once CppParameterMayBeConstPtrOrRef
 bool llmvoiceIsDone(LlmvoiceHandle* handle) {
     PipelineSession* session = handle->session.get();
     if (session == nullptr) {

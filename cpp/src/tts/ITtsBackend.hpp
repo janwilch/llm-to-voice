@@ -21,6 +21,9 @@ public:
     /// @param buffer Receives generated synthesis chunks.
     virtual void synthesizeToBuffer(const std::string& text, SpscRingBuffer<float>& buffer) = 0;
 
-    /// @brief Cancels a running synthesis.
+    /// @brief Cancels a running synthesis. Stays in effect until `resetCancel`.
     virtual void cancel() = 0;
+
+    /// @brief Clears a previous `cancel`. Call once per session, before any synthesis of that session starts.
+    virtual void resetCancel() = 0;
 };
