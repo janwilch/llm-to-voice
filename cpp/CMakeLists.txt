@@ -235,5 +235,11 @@ add_executable(segmenter_test tests/segmenter_test.cpp)
 target_link_libraries(segmenter_test PRIVATE Threads::Threads Catch2::Catch2WithMain)
 catch_discover_tests(segmenter_test)
 
+# Header-only and model-free, like the segmenter. dlopen (libdl) is only for
+# the optional NVML lookup.
+add_executable(benchmark_test tests/benchmark_test.cpp)
+target_link_libraries(benchmark_test PRIVATE ${CMAKE_DL_LIBS} Catch2::Catch2WithMain)
+catch_discover_tests(benchmark_test)
+
 message(STATUS "llama.cpp   vendored at ${llama_cpp_SOURCE_DIR}")
 message(STATUS "qwentts.cpp vendored at ${qwentts_cpp_SOURCE_DIR}")
