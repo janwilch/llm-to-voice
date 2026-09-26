@@ -34,7 +34,7 @@ TEST_CASE("a busy loop costs CPU time and resident memory", "[bench]") {
     bench::printDelta("busy loop", before, after);
 
     CHECK(after.cpuSeconds - before.cpuSeconds >= 0.04);
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     CHECK(after.rssBytes >= before.rssBytes + 60u * 1024 * 1024);
     CHECK(after.peakRssBytes >= after.rssBytes);
 #endif

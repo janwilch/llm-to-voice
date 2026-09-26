@@ -11,11 +11,22 @@
 #include <print>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 
 #if defined(__linux__)
 #include <dlfcn.h>
 #include <sys/resource.h>
 #include <time.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace bench {
@@ -62,6 +73,54 @@ inline uint64_t procStatusKb(const std::string_view key) {
     return 0;
 }
 
+inline void* openLibrary() {
+    return dlopen("libnvidia-ml.so.1", RTLD_NOW);
+}
+
+inline void* librarySymbol(void* lib, const char* name) {
+    return dlsym(lib, name);
+}
+
+#elif defined(_WIN32)
+
+inline double processCpuSeconds() {
+    FILETIME creation {}, exit {}, kernel {}, user {};
+    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
+        return 0.0;
+    }
+    // FILETIME counts 100 ns ticks
+    const auto ticks = [](const FILETIME& ft) {
+        return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    };
+    return static_cast<double>(ticks(kernel) + ticks(user)) * 1e-7;
+}
+
+/// @brief Working set now and at its peak, in bytes: what VmRSS and VmHWM are on Linux.
+inline std::pair<uint64_t, uint64_t> processMemory() {
+    PROCESS_MEMORY_COUNTERS counters {};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof counters)) {
+        return { 0, 0 };
+    }
+    return { counters.WorkingSetSize, counters.PeakWorkingSetSize };
+}
+
+/// @brief nvml.dll ships with the driver in System32; older drivers only put it into NVSMI.
+inline void* openLibrary() {
+    HMODULE lib = LoadLibraryA("nvml.dll");
+    if (lib == nullptr) {
+        lib = LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+    }
+    return reinterpret_cast<void*>(lib);
+}
+
+inline void* librarySymbol(void* lib, const char* name) {
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(lib), name));
+}
+
+#endif
+
+#if defined(__linux__) || defined(_WIN32)
+
 /// @brief NVIDIA driver library, opened at runtime (doesn't need nvml.h or the CUDA toolkit; runs without NVIDIA GPU).
 class Nvml {
     // Layouts of nvmlMemory_t and nvmlUtilization_t from nvml.h
@@ -89,15 +148,15 @@ class Nvml {
 public:
     /// @brief Binds to GPU 0 (NVML numbers only NVIDIA devices, so iGPU is not captured)
     Nvml() {
-        _lib = dlopen("libnvidia-ml.so.1", RTLD_NOW);
+        _lib = openLibrary();
         if (_lib == nullptr) {
             return;
         }
 
-        const auto init = reinterpret_cast<InitFn>(dlsym(_lib, "nvmlInit_v2"));
-        const auto getHandle = reinterpret_cast<GetHandleFn>(dlsym(_lib, "nvmlDeviceGetHandleByIndex_v2"));
-        _getMemory = reinterpret_cast<GetMemoryFn>(dlsym(_lib, "nvmlDeviceGetMemoryInfo"));
-        _getUtilization = reinterpret_cast<GetUtilizationFn>(dlsym(_lib, "nvmlDeviceGetUtilizationRates"));
+        const auto init = reinterpret_cast<InitFn>(librarySymbol(_lib, "nvmlInit_v2"));
+        const auto getHandle = reinterpret_cast<GetHandleFn>(librarySymbol(_lib, "nvmlDeviceGetHandleByIndex_v2"));
+        _getMemory = reinterpret_cast<GetMemoryFn>(librarySymbol(_lib, "nvmlDeviceGetMemoryInfo"));
+        _getUtilization = reinterpret_cast<GetUtilizationFn>(librarySymbol(_lib, "nvmlDeviceGetUtilizationRates"));
 
         // 0 == NVML_SUCCESS
         if (init == nullptr || getHandle == nullptr || _getMemory == nullptr || init() != 0 || getHandle(0, &_device) != 0) {
@@ -125,6 +184,10 @@ public:
         return out;
     }
 };
+
+#endif
+
+#if defined(__linux__)
 
 inline std::optional<uint64_t> readU64(const std::filesystem::path& path) {
     std::ifstream in(path);
@@ -171,6 +234,14 @@ inline std::optional<GpuSample> sampleGpu() {
     return sampleAmdSysfs();
 }
 
+#elif defined(_WIN32)
+
+/// @brief NVIDIA through NVML only.
+inline std::optional<GpuSample> sampleGpu() {
+    static const Nvml nvml;
+    return nvml.sample();
+}
+
 #endif
 
 inline double toMiB(const uint64_t bytes) {
@@ -200,6 +271,10 @@ inline Snapshot snapshot() {
     s.cpuSeconds = detail::processCpuSeconds();
     s.rssBytes = detail::procStatusKb("VmRSS");
     s.peakRssBytes = detail::procStatusKb("VmHWM");
+    s.gpu = detail::sampleGpu();
+#elif defined(_WIN32)
+    s.cpuSeconds = detail::processCpuSeconds();
+    std::tie(s.rssBytes, s.peakRssBytes) = detail::processMemory();
     s.gpu = detail::sampleGpu();
 #endif
     return s;

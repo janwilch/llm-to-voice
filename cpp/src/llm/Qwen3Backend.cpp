@@ -12,7 +12,6 @@
 #include <mutex>
 #include <optional>
 #include <print>
-#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -141,11 +140,10 @@ class Qwen3Backend : public ILlmBackend {
             // make sure to not exceed batch size per decode call
             const size_t chunkLen = std::min(static_cast<size_t>(_batchSize), tokens.size() - i);
 
-            for (
-                std::span slice { tokens.begin() + i, chunkLen };
-                auto&& [j, token] : std::views::enumerate(slice)
-                ) {
-                _batch.token[j] = token;
+            // index loop rather than std::views::enumerate, which libc++ doesn't implement yet
+            const std::span slice { tokens.begin() + i, chunkLen };
+            for (size_t j = 0; j < slice.size(); ++j) {
+                _batch.token[j] = slice[j];
                 _batch.pos[j] = startPos++;
                 _batch.n_seq_id[j] = 1;
                 _batch.seq_id[j][0] = 0;

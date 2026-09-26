@@ -76,6 +76,13 @@ if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/bigobj>")
 endif()
 
+# Make sure that only one self-contained binary builds
+# Include libstc++ and switch off OMP (ggml can fall back to its own thread pool)
+set(GGML_OPENMP OFF)
+if(MINGW)
+    add_link_options(-static-libstdc++ -static-libgcc)
+endif()
+
 # --- Vendored dependencies ----------------------------------------------------
 #
 # Pinned to exact commits, not moving branches. Bump a GIT_TAG only
@@ -187,6 +194,9 @@ target_compile_definitions(llmvoice PRIVATE LLMVOICE_BUILDING)
 # default visibility, so on ELF their symbols are stripped from the export
 # table at link time instead. Windows exports nothing unmarked anyway.
 set_target_properties(llmvoice PROPERTIES
+    # whether a "lib" prefix is appended is platform dependent. Make this uniform
+    PREFIX ""
+    IMPORT_PREFIX ""
     C_VISIBILITY_PRESET hidden
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
@@ -197,7 +207,8 @@ target_link_options(llmvoice PRIVATE
 
 add_executable(llmvoice_cpp src/main.cpp)
 
-target_link_libraries(llmvoice_cpp PRIVATE llmvoice CLI11::CLI11 llmvoice-audio)
+# psapi: process memory counters for the benchmark output on Windows
+target_link_libraries(llmvoice_cpp PRIVATE llmvoice CLI11::CLI11 llmvoice-audio $<$<PLATFORM_ID:Windows>:psapi>)
 
 target_compile_definitions(
     llmvoice_cpp PRIVATE
@@ -236,9 +247,9 @@ target_link_libraries(segmenter_test PRIVATE Threads::Threads Catch2::Catch2With
 catch_discover_tests(segmenter_test)
 
 # Header-only and model-free, like the segmenter. dlopen (libdl) is only for
-# the optional NVML lookup.
+# the optional NVML lookup; psapi gives the process memory counters on Windows.
 add_executable(benchmark_test tests/benchmark_test.cpp)
-target_link_libraries(benchmark_test PRIVATE ${CMAKE_DL_LIBS} Catch2::Catch2WithMain)
+target_link_libraries(benchmark_test PRIVATE ${CMAKE_DL_LIBS} $<$<PLATFORM_ID:Windows>:psapi> Catch2::Catch2WithMain)
 catch_discover_tests(benchmark_test)
 
 message(STATUS "llama.cpp   vendored at ${llama_cpp_SOURCE_DIR}")

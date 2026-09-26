@@ -9,7 +9,7 @@ Built on [llama.cpp](https://github.com/ggml-org/llama.cpp) (Qwen3 LLM) and [qwe
 - **Streaming pipeline:** LLM → segmenter → TTS on separate threads; poll text and audio independently.
 - **Voice design:** describe the speaker in plain language ("a mature woman with a warm voice…") and fix it with a seed.
 - **Speakable segments:** the segmenter drops `<think>` blocks and emoji, splits on sentence ends (aware of abbreviations, initials, numbers and list markers) and merges short sentences for more natural TTS.
-- **One library, one ggml:** llama.cpp and qwentts.cpp are linked statically into `libllmvoice` (`.so` / `.dll` / `.dylib`), which exports only the `llmvoice*` C functions.
+- **One library, one ggml:** llama.cpp and qwentts.cpp are linked statically into `llmvoice` (`llmvoice.so` / `.dll` / `.dylib`), which exports only the `llmvoice*` C functions.
 - **Cancellable:** `llmvoiceCancel` stops every stage, e.g. when the user interrupts.
 
 ## Getting started
@@ -133,3 +133,16 @@ cpp/
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the models are licensed under Apache-2.0.
+
+## Running on Windows
+
+Build with the [MSYS2](https://www.msys2.org/) **CLANG64** toolchain. The presets call plain `clang`/`clang++`, so run CMake from the CLANG64 shell or put `C:\msys64\clang64\bin` first on `PATH`.
+
+```sh
+pacman -S mingw-w64-clang-x86_64-{clang,cmake,ninja}
+pacman -S mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,shaderc}   # release-vulkan only
+```
+
+- Build as described above; the output is `cpp\build\<preset>\bin\llmvoice_cpp.exe` and `llmvoice.dll`.
+- The binaries are self-contained: they need no MSYS2 DLLs at runtime, only `vulkan-1.dll` from the GPU driver (for `release-vulkan`).
+- The `[bench]` output reports GPU memory and utilisation only with an NVIDIA driver (`nvml.dll`). CPU time on Windows advances in ~15.6 ms steps, so it is only meaningful for longer stages.

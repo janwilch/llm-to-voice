@@ -4,7 +4,7 @@ llm-to-voice itself is MIT-licensed (see [LICENSE](LICENSE)). It builds on the p
 
 ## llama.cpp and ggml
 
-https://github.com/ggml-org/llama.cpp — linked into `libllmvoice`. The ggml patches in `cpp/patches/ggml/` 0001 and 0002 come from qwentts.cpp's ggml fork (see below).
+https://github.com/ggml-org/llama.cpp — linked into `llmvoice`. The ggml patches in `cpp/patches/ggml/` 0001 and 0002 come from qwentts.cpp's ggml fork (see below).
 
 ```text
 MIT License
@@ -32,7 +32,7 @@ SOFTWARE.
 
 ## qwentts.cpp
 
-https://github.com/ServeurpersoCom/qwentts.cpp — linked into `libllmvoice`.
+https://github.com/ServeurpersoCom/qwentts.cpp — linked into `llmvoice`.
 
 ```text
 MIT License
