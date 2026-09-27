@@ -2,13 +2,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <miniaudio/miniaudio.h>
 #include <print>
+#include <random>
+#include <span>
 #include <string_view>
 #include <thread>
 
 #include "llmvoice.h"
 #include "benchmark/Benchmark.hpp"
+#include "helpers/FileTools.hpp"
 
 namespace {
 
@@ -18,9 +22,15 @@ void prepLlm(const LlmvoiceHandle* handle) {
     }
 }
 
-void prepTts(const LlmvoiceHandle* handle) {
-    if (llmvoiceCreateTtsContext(handle, 42, "A mature woman with a warm and kind voice. It has a slight crackle and sounds happy. She sounds like Helen Mirren.") != 0) {
-        throw std::runtime_error(std::format("llmvoiceCreateTtsContext failed: {}", llmvoiceLastError()));
+void prepTtsVoiceDesign(const LlmvoiceHandle* handle, const int64_t seed, const std::string &instruct) {
+    if (llmvoiceCreateTtsVoiceDesignContext(handle, seed, instruct.c_str()) != 0) {
+        throw std::runtime_error(std::format("llmvoiceCreateTtsVoiceDesignContext failed: {}", llmvoiceLastError()));
+    }
+}
+
+void prepTtsVoiceClone(const LlmvoiceHandle* handle, const std::string &wavPath, const std::string &transcriptPath) {
+    if (llmvoiceCreateTtsBaseContext(handle, wavPath.c_str(), transcriptPath.c_str()) != 0) {
+        throw std::runtime_error(std::format("llmvoiceCreateTtsBaseContext failed: {}", llmvoiceLastError()));
     }
 }
 
@@ -72,40 +82,101 @@ void playbackAudioRemainder(ma_device& device) {
     ma_device_uninit(&device);
 }
 
+struct MonoWavEncoderContext {
+    std::filesystem::path path;
+    ma_encoder encoder;
+    size_t samplesWritten = 0;
+
+    MonoWavEncoderContext(const std::filesystem::path &path, const ma_uint32 sampleRate) : path(path) {
+        const ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, 1, sampleRate);
+#ifdef _WIN32
+        const ma_result initResult = ma_encoder_init_file_w(path.c_str(), &config, &encoder);
+#else
+        const ma_result initResult = ma_encoder_init_file(path.c_str(), &config, &encoder);
+#endif
+
+        if (initResult != MA_SUCCESS) {
+            throw std::runtime_error(std::format("cannot open {}: {}", path.string(), ma_result_description(initResult)));
+        }
+    }
+
+    // prevent copies (i.e. double file handle and uninit)
+    MonoWavEncoderContext(const MonoWavEncoderContext&) = delete;
+
+    ~MonoWavEncoderContext() {
+        // finalize the sizes specified in the header
+        ma_encoder_uninit(&encoder);
+    }
+
+    void writePcm(const std::span<const float> pcm) {
+        std::vector<ma_int16> s16(pcm.size());
+        ma_pcm_f32_to_s16(s16.data(), pcm.data(), pcm.size(), ma_dither_mode_none);
+
+        ma_uint64 framesWritten = 0;
+        if (const ma_result writeResult = ma_encoder_write_pcm_frames(&encoder, s16.data(), s16.size(), &framesWritten);
+            writeResult != MA_SUCCESS || framesWritten != s16.size()
+            ) {
+            throw std::runtime_error(std::format("writing {} failed: {}", path.string(), ma_result_description(writeResult)));
+        }
+
+        samplesWritten += pcm.size();
+    }
+};
+
 } // namespace
 
 int main(const int argc, char** argv) {
     CLI::App app("llmvoice - LLM chat to speech pipeline");
-    app.require_subcommand(0);
+    app.require_subcommand(1);
+
+    CLI::App* pipeline = app.add_subcommand("pipeline", "LLM->TTS with a cloned voice");
+    CLI::App* llmOnly = app.add_subcommand("llm-only", "Run only the LLM stage");
+    CLI::App* ttsVoiceDesign = app.add_subcommand("voice-design", "Render text to a spoken output in a wav file");
 
     std::string prompt;
-    app.add_option("--prompt,-p", prompt, "Prompt text")->required();
+    for (CLI::App* sub : {pipeline, llmOnly, ttsVoiceDesign}) {
+        sub->add_option("--prompt,-p", prompt, "Prompt text")->required();
+    }
 
     bool noThink = false;
-    app.add_flag("--no-think", noThink, "Suppress the model's reasoning block (faster first response, lower answer quality)");
+    for (CLI::App* sub : {pipeline, llmOnly}) {
+        sub->add_flag("--no-think", noThink, "Suppress the model's reasoning block (faster first response, lower answer quality)");
+    }
 
-    // llm-only subcommand
-    CLI::App* llmOnly = app.add_subcommand("llm-only", "Run only the LLM stage");
+    // voice-design writes a voice sample here, pipeline clones it from here by default
+    const std::filesystem::path defaultVoiceDir = "out/voice";
+    constexpr std::string_view sampleWavName = "sample.wav";
+    constexpr std::string_view sampleTextName = "transcript.txt";
+
+    std::string wavPath = (defaultVoiceDir / sampleWavName).generic_string();
+    std::string transcriptPath = (defaultVoiceDir / sampleTextName).generic_string();
+    pipeline->add_option("--sample-wav", wavPath, "Sample voice clip to clone")->capture_default_str();
+    pipeline->add_option("--sample-text", transcriptPath, "Transcript of the sample voice clip")->capture_default_str();
+
     bool skipSegmenter = false;
     llmOnly->add_flag("--skip-segmenter", skipSegmenter, "Output raw text pieces without segmentation");
 
-    // tts-only subcommand
-    CLI::App* ttsOnly = app.add_subcommand("tts-only", "Run only the TTS stage");
-    bool noAudio = false;
-    ttsOnly->add_flag("--no-audio", noAudio, "Only print generated chunk info; no audio output");
+    std::string ttsInstruct;
+    std::string ttsOutPath = defaultVoiceDir.string();
+    ttsVoiceDesign->add_option("--instruct", ttsInstruct, "Describe the voice (mood and tone)")->required();
+    ttsVoiceDesign->add_option("--out-path", ttsOutPath, "Folder where the spoken text is stored as wav and text transcript")->capture_default_str();
 
     CLI11_PARSE(app, argc, argv);
 
     // -------------- set up & run the backend --------------
     const std::string llmModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf";
-    const std::string talkerModel = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-voicedesign-Q4_K_M.gguf";
+    const std::string talkerModelVoiceDesign = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-voicedesign-Q4_K_M.gguf";
+    const std::string talkerModelBase = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-talker-1.7b-base-Q4_K_M.gguf";
     const std::string codecModel  = std::string(QWEN_DEFAULT_MODELS_DIR) + "/Qwen3-TTS-GGUF/qwen-tokenizer-12hz-Q4_K_M.gguf";
 
     const LlmvoiceConfig config {
         .llmModelPath = llmModel.c_str(),
         .llmContextSize = 8192,
-        .ttsTalkerPath = talkerModel.c_str(),
-        .ttsCodecPath = codecModel.c_str()
+        .ttsTalkerPath = *ttsVoiceDesign
+            ? talkerModelVoiceDesign.c_str()
+            : talkerModelBase.c_str(),
+        .ttsCodecPath = codecModel.c_str(),
+        .ttsMode = *ttsVoiceDesign ? 1 : 0
     };
 
     LlmvoiceHandle* handle;
@@ -118,7 +189,22 @@ int main(const int argc, char** argv) {
             throw std::runtime_error(std::format("llmvoiceCreate failed: {}", llmvoiceLastError()));
         }
 
-        llmvoiceSetSegmenterConfig(handle, 24, 200);
+        llmvoiceSetSegmenterConfig(handle, 24, 60);
+
+        if (*llmOnly) {
+            prepLlm(handle);
+        }
+        else if (*ttsVoiceDesign) {
+            // intentionally roll a different seed every time to try out voice variations
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution dist(1, 100);
+            prepTtsVoiceDesign(handle, dist(gen), ttsInstruct);
+        }
+        else {
+            prepLlm(handle);
+            prepTtsVoiceClone(handle, wavPath, transcriptPath);
+        }
     }
 
     {
@@ -138,28 +224,24 @@ int main(const int argc, char** argv) {
         bench::Scoped measure("STAGE SUBMIT");
 
         if (*llmOnly) {
-            prepLlm(handle);
             if (llmvoiceSubmitLlm(handle, prompt.c_str(), !skipSegmenter, noThink, 1024) != 0) {
                 throw std::runtime_error(std::format("llmvoiceSubmitLlm failed: {}", llmvoiceLastError()));
             }
         }
-        else if (*ttsOnly) {
-            prepTts(handle);
+        else if (*ttsVoiceDesign) {
             if (llmvoiceSubmitTts(handle, prompt.c_str()) != 0) {
                 throw std::runtime_error(std::format("llmvoiceSubmitTts failed: {}", llmvoiceLastError()));
             }
         }
         else {
-            prepLlm(handle);
-            prepTts(handle);
             if (llmvoiceSubmitPipeline(handle, prompt.c_str(), noThink, 1024) != 0) {
                 throw std::runtime_error(std::format("llmvoiceSubmitPipeline failed: {}", llmvoiceLastError()));
             }
         }
     }
 
-    // -------------- (audio) output --------------
-    const bool playAudio = !*llmOnly && !noAudio;
+    // -------------- generate output --------------
+    const bool playAudio = !*llmOnly && !*ttsVoiceDesign;
     ma_device device {};
     PlaybackContext playbackContext { .handle = handle, .firstPcm = firstPcm };
     if (playAudio) {
@@ -171,21 +253,33 @@ int main(const int argc, char** argv) {
     constexpr int32_t llmBufferSize = 64;
     std::string llmBuffer(llmBufferSize, '\0');
 
-    constexpr size_t ttsBufferSize = 64;
-    std::vector<float> ttsBuffer(ttsBufferSize);
+    constexpr int32_t ttsChunkSize = 64;
+    std::vector<float> ttsChunkBuffer(ttsChunkSize);
+
+    std::filesystem::path wavOut;
+    std::filesystem::path transcriptOut;
+
+    // ReSharper disable once CppTooWideScope - writes are *appended*
+    std::optional<MonoWavEncoderContext> wavContext;
+    if (*ttsVoiceDesign) {
+        std::filesystem::path outDir = ttsOutPath;
+        std::filesystem::create_directories(outDir);
+        transcriptOut = outDir / sampleTextName;
+        wavOut = outDir / sampleWavName;
+        wavContext.emplace(wavOut, LLMVOICE_PCM_SAMPLE_RATE);
+    }
 
     {
         bench::Scoped measure("STAGE GENERATION & PLAYBACK");
 
-        size_t spoken = 0; // used only if !playAudio
         while (!llmvoiceIsDone(handle)) {
             const size_t written = llmvoicePollText(handle, llmBuffer.data(), llmBufferSize);
 
-            // with audio on, the playback callback is the only one allowed to read PCM
-            const size_t polled = playAudio ? 0 : llmvoicePollPcm(handle, ttsBuffer.data(), ttsBufferSize);
-            spoken += polled;
-            if (polled > 0) {
-                firstPcm.hit();
+            if (*ttsVoiceDesign && wavContext) {
+                if (const size_t polled = llmvoicePollPcm(handle, ttsChunkBuffer.data(), ttsChunkSize)) {
+                    firstPcm.hit();
+                    wavContext->writePcm(std::span(ttsChunkBuffer.data(), polled));
+                }
             }
 
             if (written == 0) {
@@ -201,11 +295,19 @@ int main(const int argc, char** argv) {
             std::fflush(stdout);
         }
         std::println();
-        std::println("| ({} PCM values)", spoken);
+
+        if (wavContext) {
+            if (wavContext->samplesWritten == 0) {
+                throw std::runtime_error(std::format("no PCM samples were written to {}", wavOut.string()));
+            }
+
+            writeFileText(transcriptOut.string(), prompt);
+            std::println("wrote audio ({}) and transcript ({})", wavOut.string(), transcriptOut.string());
+        }
     }
 
     // llmvoiceIsDone is true only once the PCM buffer is drained too, so this is the end of output, not of generation
-    if (!*ttsOnly) {
+    if (!*ttsVoiceDesign) {
         bench::printSince("time to first text", submitStart, firstText.when());
     }
     if (!*llmOnly) {

@@ -65,6 +65,16 @@ public:
         return _writePos.load(std::memory_order_acquire) - _readPos.load(std::memory_order_relaxed);
     }
 
+    /// @brief Total number of items ever written (does not wrap with the buffer).
+    size_t totalWritten() const {
+        return _writePos.load(std::memory_order_acquire);
+    }
+
+    /// @brief Total number of items ever read (does not wrap with the buffer).
+    size_t totalRead() const {
+        return _readPos.load(std::memory_order_acquire);
+    }
+
     /// @brief Consumer: discard everything currently buffered.
     void clear() {
         _readPos.store(_writePos.load(std::memory_order_acquire), std::memory_order_release);

@@ -31,6 +31,9 @@ typedef struct {
 
     const char* ttsTalkerPath;
     const char* ttsCodecPath;
+
+    // 0=Base, 1=VoiceDesign
+    int ttsMode;
 } LlmvoiceConfig;
 
 /// @brief Initialize the llmvoice backend.
@@ -47,9 +50,13 @@ LLMVOICE_API int llmvoiceWarmup(const LlmvoiceHandle*);
 /// Call before submitting to LLM or pipeline.
 LLMVOICE_API int llmvoiceCreateLlmContext(const LlmvoiceHandle*, const char* systemPromptUtf8);
 
-/// @brief Create a fresh TTS context for generation.
+/// @brief Create a fresh TTS context for generation in VoiceDesign mode.
 /// Call before submitting to TTS or pipeline.
-LLMVOICE_API int llmvoiceCreateTtsContext(const LlmvoiceHandle*, int64_t seed, const char* instructUtf8);
+LLMVOICE_API int llmvoiceCreateTtsVoiceDesignContext(const LlmvoiceHandle*, int64_t seed, const char* instructUtf8);
+
+/// @brief Create a fresh TTS context for generation in Base mode.
+/// Call before submitting to TTS or pipeline.
+LLMVOICE_API int llmvoiceCreateTtsBaseContext(const LlmvoiceHandle*, const char* wavPath, const char* transcriptPath);
 
 /// @brief Configure how LLM output is split into segments, from the next submit on.
 /// @param minSentenceLength Sentence ends before this many bytes are ignored (default 24).
@@ -58,6 +65,7 @@ LLMVOICE_API void llmvoiceSetSegmenterConfig(LlmvoiceHandle*, size_t minSentence
 
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
 /// Both `pollText` and `pollPcm` must be polled: if DEFAULT_QUEUE_CAPA segments of text are unread, TTS stalls until `pollText` is called.
+/// Each segment's text is only returned by `pollText` once `pollPcm` has returned the start of its audio, so text appears as its audio starts.
 /// @return 0 on success, non-0 otherwise.
 LLMVOICE_API int llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink, int maxTokens);
 

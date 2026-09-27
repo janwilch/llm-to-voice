@@ -67,7 +67,8 @@ TEST_CASE("Mark keeps the first hit only", "[bench]") {
 
 TEST_CASE("printSince handles a mark that was never hit", "[bench]") {
     const bench::Snapshot origin = bench::snapshot();
-    bench::Mark never;
+    // ReSharper disable once CppVariableCanBeMadeConstexpr
+    const bench::Mark never;
     bench::printSince("never", origin, never.when());
     bench::printSince("now", origin, std::chrono::steady_clock::now());
 }

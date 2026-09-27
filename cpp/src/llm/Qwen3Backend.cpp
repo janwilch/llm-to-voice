@@ -419,7 +419,9 @@ public:
 
     /// @copydoc ILlmBackend::resetCancel
     void resetCancel() override { _cancelled = false; }
-};}
+};
+
+}
 
 std::unique_ptr<ILlmBackend> createQwen3Backend(const std::string &modelPath, int32_t contextSize) {
     return std::make_unique<Qwen3Backend>(modelPath, contextSize);

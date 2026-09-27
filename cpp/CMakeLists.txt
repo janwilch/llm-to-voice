@@ -168,7 +168,7 @@ target_link_libraries(qwen-core PUBLIC ggml Threads::Threads)
 # We take that miniaudio.h and compile it here
 add_library(llmvoice-audio STATIC src/audio/miniaudio.c)
 target_compile_definitions(llmvoice-audio PUBLIC
-    MA_NO_DECODING MA_NO_ENCODING MA_NO_GENERATION
+    MA_NO_DECODING MA_NO_GENERATION
     MA_NO_ENGINE MA_NO_NODE_GRAPH MA_NO_RESOURCE_MANAGER
 )
 # dlopen backends (PipeWire/PulseAudio/ALSA, ...) at runtime

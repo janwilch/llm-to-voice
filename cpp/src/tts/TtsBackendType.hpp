@@ -8,7 +8,7 @@ enum class TtsBackendType {
     Fake
 };
 
-inline std::string to_string(TtsBackendType backend) {
+inline std::string to_string(const TtsBackendType backend) {
     switch (backend) {
         case TtsBackendType::None:
             return "none";

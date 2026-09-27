@@ -245,6 +245,7 @@ TEST_CASE("the result is independent of chunk size", "[segmenter][think]") {
 
 TEST_CASE("a 4-byte character split across pieces is reassembled", "[segmenter][utf8]") {
     // U+20000 (a CJK ideograph, not an emoji), four bytes: split at each of its three interior boundaries
+    // ReSharper disable once CppVariableCanBeMadeConstexpr
     const std::string character = "\xF0\xA0\x80\x80";
     const size_t cut = GENERATE(range(1uz, 4uz));
     CAPTURE(cut);

@@ -110,7 +110,7 @@ inline void* openLibrary() {
     if (lib == nullptr) {
         lib = LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
     }
-    return reinterpret_cast<void*>(lib);
+    return lib;
 }
 
 inline void* librarySymbol(void* lib, const char* name) {
@@ -254,8 +254,7 @@ inline double signedMiB(const uint64_t after, const uint64_t before) {
 
 /// @brief ` (46%)`, or nothing when the stage is too short for CPU time / wall time to mean anything (both are clock-granularity noise below ~1 ms).
 inline std::string cpuShare(const double wallMs, const double cpuMs) {
-    constexpr double MIN_WALL_MS = 1.0;
-    if (wallMs < MIN_WALL_MS) {
+    if (wallMs < 1.0) {
         return "";
     }
     return std::format(" ({:.0f}%)", cpuMs / wallMs * 100.0);

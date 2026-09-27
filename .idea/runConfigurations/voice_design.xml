@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="voice-design" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="voice-design -p &quot;Hello! This is my voice. I'm happy to tell you a story whenever you like.&quot; --instruct &quot;A mature woman with a warm and kind voice. It has a slight crackle and sounds happy.&quot;" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" WORKING_DIR="file://$PROJECT_DIR$" PASS_PARENT_ENVS_2="true" PROJECT_NAME="llmvoice_cpp" TARGET_NAME="llmvoice_cpp" CONFIG_NAME="debug" RUN_TARGET_PROJECT_NAME="llmvoice_cpp" RUN_TARGET_NAME="llmvoice_cpp">
+    <method v="2">
+      <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+    </method>
+  </configuration>
+</component>

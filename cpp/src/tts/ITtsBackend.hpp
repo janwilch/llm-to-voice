@@ -8,10 +8,15 @@ class ITtsBackend {
 public:
     virtual ~ITtsBackend() = default;
 
-    /// @brief Sets the speaker persona for the following generation.
+    /// @brief Sets the speaker persona for a Qwen3-TTS-VoiceDesign generation.
     /// @param seed Seed for improved speaker consistency.
     /// @param instruct Define the speaker voice.
-    virtual void createFreshContext(int64_t seed, const std::string& instruct) = 0;
+    virtual void createVoiceDesignContext(int64_t seed, const std::string& instruct) = 0;
+
+    /// @brief Sets the speaker persona for a Qwen3-TTS-Base generation.
+    /// @param wavPath Path to an example audio clip. The generation will clone this voice.
+    /// @param transcriptPath Path to a transcript of the example.
+    virtual void createBaseContext(const std::string &wavPath, const std::string &transcriptPath) = 0;
 
     /// @brief Runs a synthesis without returning anything.
     virtual void warmup() = 0;

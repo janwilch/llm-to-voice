@@ -14,6 +14,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -27,11 +28,21 @@ struct PipelineSession {
     BlockingQueue<std::string> llmTokenQueue { DEFAULT_QUEUE_CAPA };
     BlockingQueue<std::string> segmentsToTtsQueue { DEFAULT_QUEUE_CAPA };
     BlockingQueue<std::string> segmentsOutQueue { DEFAULT_QUEUE_CAPA };
+    // pipeline only: for each segment in segmentsOutQueue, the pcmOut position where its audio starts; pushed before the segment
+    BlockingQueue<size_t> segmentsOutPcmStart { DEFAULT_QUEUE_CAPA };
 
     bool segment = false;
+    // pipeline only: text is held back until its audio is polled
+    bool syncTextToPcm = false;
 
     std::string llmTextRemainder;
     bool llmTextStarted = false;
+
+    struct PendingSegment {
+        std::string text;
+        size_t pcmStart;
+    };
+    std::optional<PendingSegment> pendingSegment;
 
     SpscRingBuffer<float> pcmOut { LLMVOICE_PCM_SAMPLE_RATE * PCM_BUFFER_SECONDS };
 
@@ -130,6 +141,7 @@ static bool isSessionDone(PipelineSession& session) {
     // workers first: once none is running, nothing can be added to the outputs anymore, so the empty checks are final
     return session.runningWorkers.load(std::memory_order_acquire) == 0
         && session.llmTextRemainder.empty()
+        && !session.pendingSegment
         && textOutputQueue(session).empty()
         && session.pcmOut.available() == 0;
 }
@@ -147,6 +159,7 @@ static void cancelSession(LlmvoiceHandle* handle) {
     handle->session->llmTokenQueue.close();
     handle->session->segmentsToTtsQueue.close();
     handle->session->segmentsOutQueue.close();
+    handle->session->segmentsOutPcmStart.close();
     handle->session.reset();
 }
 
@@ -191,9 +204,25 @@ LlmvoiceHandle* llmvoiceCreate(const LlmvoiceConfig* config) {
     LlmvoiceHandle* handle = nullptr;
 
     guarded([&] {
+        if (config == nullptr) {
+            throw std::invalid_argument("config must not be null");
+        }
+
+        GenerationType mode;
+        switch (config->ttsMode) {
+            case 0:
+                mode = GenerationType::Base;
+                break;
+            case 1:
+                mode = GenerationType::VoiceDesign;
+                break;
+            default:
+                throw std::invalid_argument(std::format("unsupported TTS mode: {}", config->ttsMode));
+        }
+
         handle = new LlmvoiceHandle {
             .llmBackend = createQwen3Backend(config->llmModelPath, config->llmContextSize),
-            .ttsBackend = createQwen3TtsBackend(config->ttsTalkerPath, config->ttsCodecPath)
+            .ttsBackend = createQwen3TtsBackend(config->ttsTalkerPath, config->ttsCodecPath, mode)
         };
     });
 
@@ -222,9 +251,15 @@ int llmvoiceCreateLlmContext(const LlmvoiceHandle* handle, const char *systemPro
     }) ? 0 : 1;
 }
 
-int llmvoiceCreateTtsContext(const LlmvoiceHandle* handle, const int64_t seed, const char *instructUtf8) {
+int llmvoiceCreateTtsVoiceDesignContext(const LlmvoiceHandle* handle, const int64_t seed, const char *instructUtf8) {
     return guarded([&] {
-        handle->ttsBackend->createFreshContext(seed, instructUtf8);
+        handle->ttsBackend->createVoiceDesignContext(seed, instructUtf8);
+    }) ? 0 : 1;
+}
+
+int llmvoiceCreateTtsBaseContext(const LlmvoiceHandle* handle, const char* wavPath, const char* transcriptPath){
+    return guarded([&] {
+        handle->ttsBackend->createBaseContext(wavPath, transcriptPath);
     }) ? 0 : 1;
 }
 
@@ -244,6 +279,7 @@ int llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, const
     const bool ok = guarded([&] {
         PipelineSession* session = beginSession(handle);
         session->segment = true;
+        session->syncTextToPcm = true;
 
         try {
             session->llmThread = startWorker(session, "LLM generation", [handle, session, prompt = std::string(promptUtf8), noThink, maxTokens] {
@@ -255,8 +291,10 @@ int llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, const
             session->ttsThread = startWorker(session, "TTS", [handle, session] {
                 try {
                     while (std::optional<std::string> next = session->segmentsToTtsQueue.pop()) {
-                        // speak and output the segment simultaneously (basically "closed captioning")
-                        if (!session->segmentsOutQueue.push(next.value())) {
+                        // speak and output the segment simultaneously (basically "closed captioning"):
+                        // llmvoicePollText releases it once PCM is polled up to where its audio starts
+                        if (!session->segmentsOutPcmStart.push(session->pcmOut.totalWritten())
+                            || !session->segmentsOutQueue.push(next.value())) {
                             return; // closed = cancelled
                         }
 
@@ -359,8 +397,33 @@ size_t llmvoicePollText(LlmvoiceHandle* handle, char *dstUtf8, const size_t maxB
         written += count;
     }
 
-    std::string piece;
-    while (written < maxBytes && queue.tryPop(piece)) {
+    while (written < maxBytes) {
+        if (!session.pendingSegment) {
+            std::string next;
+            if (!queue.tryPop(next)) {
+                break;
+            }
+
+            // pushed before the segment, so it is always there
+            size_t pcmStart = 0;
+            if (session.syncTextToPcm) {
+                session.segmentsOutPcmStart.tryPop(pcmStart);
+            }
+            session.pendingSegment = { std::move(next), pcmStart };
+        }
+
+        if (session.syncTextToPcm) {
+            // released once the first sample of its own audio is polled, or when no more audio will come (e.g. a segment without audio at the end)
+            const bool audioStarted = session.pcmOut.totalRead() > session.pendingSegment->pcmStart;
+            const bool noMoreAudio = session.runningWorkers.load(std::memory_order_acquire) == 0 && session.pcmOut.available() == 0;
+            if (!audioStarted && !noMoreAudio) {
+                break;
+            }
+        }
+
+        std::string piece = std::move(session.pendingSegment->text);
+        session.pendingSegment.reset();
+
         std::string text = session.segment && session.llmTextStarted
             ? " " + piece
             : std::move(piece);
@@ -411,6 +474,7 @@ bool llmvoiceIsDone(LlmvoiceHandle* handle) {
     return true;
 }
 
+ // ReSharper disable once CppRedundantVoidArgumentList
 const char* llmvoiceLastError(void) {
     return lastError.c_str();
 }

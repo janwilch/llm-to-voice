@@ -1,25 +1,64 @@
-#include "Qwen3TtsBackend.hpp"
+#include "../helpers/EnumToString.hpp"
+#include "../helpers/FileTools.hpp"
+#include "../threading/SpscRingBuffer.hpp"
 #include "ITtsBackend.hpp"
+#include "Qwen3TtsBackend.hpp"
+
 #include "qwen.h"
 
-#include "../threading/SpscRingBuffer.hpp"
+// NOTE - this is an internal qwen-tts.cpp header; could have breaking changes between versions
+#include "audio-io.h"
 
+#include <filesystem>
 #include <format>
 #include <mutex>
+#include <ostream>
 #include <thread>
 
 namespace {
 class Qwen3TtsBackend : public ITtsBackend {
+    GenerationType _mode;
+
+    // for VoiceDesign mode
     int64_t _seed = 0;
     std::string _instruct;
+
+    // for Base mode
+    int32_t _refAudioSamples = 0;
+    std::vector<float> _refAudio;
+    std::string _transcript;
 
     // One handle per loaded talker+codec GGUF pair. Aggregates talker LM weights, code predictor MTP head, optional speaker encoder, the 12Hz codec, the BPE tokenizer, and the GGML backend pair.
     qt_context* _context;
     std::mutex _mutex;
     std::atomic<bool> _cancelled = { false };
 
+    qt_tts_params getTtsParams(const char* text) {
+        qt_tts_params params {};
+        qt_tts_default_params(&params);
+
+        params.text = text;
+
+        if (_mode == GenerationType::VoiceDesign) {
+            params.seed = _seed;
+            params.instruct = _instruct.c_str();
+        }
+        else if (_mode == GenerationType::Base) {
+            params.ref_n_samples = _refAudioSamples;
+            params.ref_audio_24k = _refAudio.data();
+            params.ref_text = _transcript.c_str();
+        }
+        else {
+            throw std::runtime_error(std::format("unsupported mode {}", _mode));
+        }
+
+        return params;
+    }
+
 public:
-    Qwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath) {
+    Qwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath, const GenerationType mode) {
+        _mode = mode;
+
         qt_init_params initParams{};
         qt_init_default_params(&initParams);
 
@@ -36,18 +75,48 @@ public:
         qt_free(_context);
     }
 
-    /// @copydoc ITtsBackend::createFreshContext
-    void createFreshContext(const int64_t seed, const std::string& instruct) override {
+    /// @copydoc ITtsBackend::createVoiceDesignContext
+    void createVoiceDesignContext(const int64_t seed, const std::string& instruct) override {
+        if (_mode != GenerationType::VoiceDesign) {
+            throw std::runtime_error("must set voice design mode during construction");
+        }
+
         _seed = seed;
         _instruct = instruct;
     }
 
+    /// @copydoc ITtsBackend::createBaseContext
+    void createBaseContext(const std::string &wavPath, const std::string &transcriptPath) override {
+        if (_mode != GenerationType::Base) {
+            throw std::runtime_error("must set base mode during construction");
+        }
+
+        const std::string wavNotExists = std::format("sample WAV does not exist or is not readable: {}", wavPath);
+        if (std::filesystem::exists(wavPath)) {
+            _refAudioSamples = 0;
+            if (float* raw = audio_read_mono(wavPath.c_str(), 24000, &_refAudioSamples)) {
+                _refAudio.assign(raw, raw + _refAudioSamples);
+                free(raw);
+            }
+            else {
+                throw std::runtime_error(wavNotExists);
+            }
+        }
+        else {
+            throw std::runtime_error(wavNotExists);
+        }
+
+        if (std::filesystem::exists(transcriptPath)) {
+            _transcript = readFileText(transcriptPath);
+        }
+        else {
+            throw std::runtime_error(std::format("sample transcript does not exist or is not readable: {}", transcriptPath));
+        }
+    }
+
     /// @copydoc ITtsBackend::warmup
     void warmup() override {
-        qt_tts_params params{};
-        qt_tts_default_params(&params);
-        params.text = "This is a short warmup sentence. It is long enough to produce several chunks of audio.";
-        params.instruct = "A calm, neutral voice.";
+        qt_tts_params params = getTtsParams("This is a short warmup sentence. It is long enough to produce several chunks of audio.");
 
         // non-null on_chunk selects the streaming pipeline, same as synthesizeToBuffer
         params.on_chunk = [](const float*, int, void*) -> bool { return true; };
@@ -63,12 +132,7 @@ public:
 
     /// @copydoc ITtsBackend::synthesizeToBuffer
     void synthesizeToBuffer(const std::string& text, SpscRingBuffer<float>& buffer) override {
-        qt_tts_params params{};
-        qt_tts_default_params(&params);
-
-        params.text = text.c_str();
-        params.seed = _seed;
-        params.instruct = _instruct.c_str();
+        qt_tts_params params = getTtsParams(text.c_str());
 
         struct UserData {
             SpscRingBuffer<float>& b;
@@ -124,8 +188,9 @@ public:
         _cancelled.store(false);
     }
 };
+
 }
 
-std::unique_ptr<ITtsBackend> createQwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath) {
-    return std::make_unique<Qwen3TtsBackend>(talkerPath, codecPath);
+std::unique_ptr<ITtsBackend> createQwen3TtsBackend(const std::string& talkerPath, const std::string& codecPath, const GenerationType mode) {
+    return std::make_unique<Qwen3TtsBackend>(talkerPath, codecPath, mode);
 }
