@@ -150,7 +150,7 @@ Build with the [MSYS2](https://www.msys2.org/) **CLANG64** toolchain. The preset
 
 ```sh
 pacman -S mingw-w64-clang-x86_64-{clang,cmake,ninja}
-pacman -S mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,shaderc}   # release-vulkan only
+pacman -S mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,shaderc,spirv-headers}   # release-vulkan only
 ```
 
 - Build as described above; the output is `cpp\build\<preset>\bin\llmvoice_cpp.exe` and `llmvoice.dll`.

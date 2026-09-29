@@ -50,6 +50,7 @@ jobs:
             mingw-w64-clang-x86_64-vulkan-headers
             mingw-w64-clang-x86_64-vulkan-loader
             mingw-w64-clang-x86_64-shaderc
+            mingw-w64-clang-x86_64-spirv-headers
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
