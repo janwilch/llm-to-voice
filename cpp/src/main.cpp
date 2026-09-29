@@ -258,14 +258,16 @@ int main(const int argc, char** argv) {
 
     std::filesystem::path wavOut;
     std::filesystem::path transcriptOut;
+    std::filesystem::path instructOut;
 
     // ReSharper disable once CppTooWideScope - writes are *appended*
     std::optional<MonoWavEncoderContext> wavContext;
     if (*ttsVoiceDesign) {
         std::filesystem::path outDir = ttsOutPath;
         std::filesystem::create_directories(outDir);
-        transcriptOut = outDir / sampleTextName;
         wavOut = outDir / sampleWavName;
+        transcriptOut = outDir / sampleTextName;
+        instructOut = outDir / "instruct.txt";
         wavContext.emplace(wavOut, LLMVOICE_PCM_SAMPLE_RATE);
     }
 
@@ -302,7 +304,8 @@ int main(const int argc, char** argv) {
             }
 
             writeFileText(transcriptOut.string(), prompt);
-            std::println("wrote audio ({}) and transcript ({})", wavOut.string(), transcriptOut.string());
+            writeFileText(instructOut.string(), ttsInstruct);
+            std::println("wrote audio ({}), transcript ({}) and instruct ({})", wavOut.string(), transcriptOut.string(), instructOut.string());
         }
     }
 
