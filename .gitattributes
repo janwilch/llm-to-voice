@@ -2,6 +2,8 @@
 * text=auto
 
 *.md text
+# git apply matches context byte for byte against LF sources, so never CRLF.
+*.patch text eol=lf
 *.wav binary
 *.gguf binary
 *.onnx binary

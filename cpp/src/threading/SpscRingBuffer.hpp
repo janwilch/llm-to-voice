@@ -6,13 +6,21 @@
 #include <new>
 #include <vector>
 
+// libstdc++ only declares it when the compiler defines __GCC_DESTRUCTIVE_SIZE,
+// which clang does from version 19 on.
+#ifdef __cpp_lib_hardware_interference_size
+inline constexpr size_t kCacheLineSize = std::hardware_destructive_interference_size;
+#else
+inline constexpr size_t kCacheLineSize = 64;
+#endif
+
 /// @brief A lock-free ring buffer for *exactly* one producer and one consumer.
 template <typename T>
 class SpscRingBuffer {
     std::vector<T> _buffer;
     size_t _mask;
-    alignas(std::hardware_destructive_interference_size) std::atomic<size_t> _writePos {0};
-    alignas(std::hardware_destructive_interference_size) std::atomic<size_t> _readPos {0};
+    alignas(kCacheLineSize) std::atomic<size_t> _writePos {0};
+    alignas(kCacheLineSize) std::atomic<size_t> _readPos {0};
 
 public:
     explicit SpscRingBuffer(const size_t capacity) :
