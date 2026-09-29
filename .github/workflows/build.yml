@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -66,5 +67,30 @@ jobs:
       - uses: actions/upload-artifact@v5
         with:
           name: llmvoice-${{ matrix.os-name }}-${{ matrix.preset }}
-          path: cpp/build/${{ matrix.preset }}/bin/
+          # Just the deliverables, not the test executables next to them.
+          path: |
+            cpp/build/${{ matrix.preset }}/bin/llmvoice_cpp
+            cpp/build/${{ matrix.preset }}/bin/llmvoice_cpp.exe
+            cpp/build/${{ matrix.preset }}/bin/llmvoice.so
+            cpp/build/${{ matrix.preset }}/bin/llmvoice.dll
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          for d in llmvoice-*; do (cd "$d" && zip -r "../$d.zip" .); done
+          gh release create "${{ github.ref_name }}" *.zip \
+            --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
