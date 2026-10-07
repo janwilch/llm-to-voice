@@ -105,7 +105,7 @@ llmvoiceCreateLlmContext(systemPrompt):    // fresh chat context
 llmvoiceCreateTtsBaseContext(wav, transcript) / llmvoiceCreateTtsVoiceDesignContext(seed, instruct):
   ITtsBackend.createBaseContext / createVoiceDesignContext  // speaker for following generations
 llmvoiceWarmup
-llmvoiceSetSegmenterConfig(minSentenceLength, coalesceMinChars):  // from next submit on
+llmvoiceSetSegmenterConfig(minSentenceLength, minSegmentLength):  // from next submit on
 
 llmvoiceSubmitPipeline(prompt):  // also SubmitLlm (LLM [+ segmenter]) and SubmitTts (TTS only)
   LLM THREAD:        ILlmBackend.synthesizeToQueue(prompt, llmTokenQueue)

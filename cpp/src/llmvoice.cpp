@@ -263,10 +263,10 @@ int llmvoiceCreateTtsBaseContext(const LlmvoiceHandle* handle, const char* wavPa
     }) ? 0 : 1;
 }
 
-void llmvoiceSetSegmenterConfig(LlmvoiceHandle* handle, const size_t minSentenceLength, const size_t coalesceMinChars) {
+void llmvoiceSetSegmenterConfig(LlmvoiceHandle* handle, const size_t minSentenceLength, const size_t minSegmentLength) {
     handle->segmenterConfig = {
         .minSentenceLength = minSentenceLength,
-        .coalesceMinChars = coalesceMinChars
+        .minSegmentLength = minSegmentLength
     };
 }
 

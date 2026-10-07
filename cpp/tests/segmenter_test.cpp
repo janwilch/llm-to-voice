@@ -100,8 +100,8 @@ static bool waitFor(std::predicate auto condition, const int attempts = 200) {
 }
 
 // Splitting only: no minimum length, no coalescing, so each sentence is visible.
-static constexpr SegmenterConfig splitOnly { .minSentenceLength = 0, .coalesceMinChars = 0 };
-static constexpr SegmenterConfig coalescing { .minSentenceLength = 0, .coalesceMinChars = 60 };
+static constexpr SegmenterConfig splitOnly { .minSentenceLength = 0, .minSegmentLength = 0 };
+static constexpr SegmenterConfig coalescing { .minSentenceLength = 0, .minSegmentLength = 60 };
 
 TEST_CASE("sentence splitting", "[segmenter][split]") {
     auto [name, pieces, expected] = GENERATE(table<std::string_view, Segments, Segments>({
@@ -194,7 +194,7 @@ TEST_CASE("coalesced lines do not run together", "[segmenter][split]") {
 
 TEST_CASE("sentence ends below the minimum length are ignored", "[segmenter][split]") {
     CHECK_THAT(run({"Yes. No. Maybe so, and here is a longer clause. "},
-                   { .minSentenceLength = 24, .coalesceMinChars = 0 }),
+                   { .minSentenceLength = 24, .minSegmentLength = 0 }),
                Catch::Matchers::Equals(Segments{"Yes. No. Maybe so, and here is a longer clause."}));
 }
 

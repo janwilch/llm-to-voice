@@ -60,8 +60,8 @@ LLMVOICE_API int llmvoiceCreateTtsBaseContext(const LlmvoiceHandle*, const char*
 
 /// @brief Configure how LLM output is split into segments, from the next submit on.
 /// @param minSentenceLength Sentence ends before this many bytes are ignored (default 24).
-/// @param coalesceMinChars Sentences are merged until a segment has this many bytes; 0 disables merging (default 60).
-LLMVOICE_API void llmvoiceSetSegmenterConfig(LlmvoiceHandle*, size_t minSentenceLength, size_t coalesceMinChars);
+/// @param minSegmentLength Sentences are merged until a segment has this many bytes; 0 disables merging (default 60).
+LLMVOICE_API void llmvoiceSetSegmenterConfig(LlmvoiceHandle*, size_t minSentenceLength, size_t minSegmentLength);
 
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
 /// Both `pollText` and `pollPcm` must be polled: if DEFAULT_QUEUE_CAPA segments of text are unread, TTS stalls until `pollText` is called.

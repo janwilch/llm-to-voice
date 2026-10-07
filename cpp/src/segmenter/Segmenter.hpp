@@ -14,7 +14,7 @@
 
 struct SegmenterConfig {
     size_t minSentenceLength = 24;
-    size_t coalesceMinChars = 60;
+    size_t minSegmentLength = 60;
 };
 
 /// @brief Turns a stream of raw LLM token pieces into speakable segments: reassembles UTF-8, drops emoji and `<think>` blocks, splits on sentence ends, and merges the result up to `coalesceMinChars`.
@@ -341,7 +341,7 @@ class Segmenter {
             return true;
         }
 
-        if (config.coalesceMinChars == 0) {
+        if (config.minSegmentLength == 0) {
             return segmentsOutQueue.push(std::string(sentence));
         }
 
@@ -352,7 +352,7 @@ class Segmenter {
         _pending += sentence;
 
         // yield as soon as the threshold is met
-        if (_pending.size() < config.coalesceMinChars) {
+        if (_pending.size() < config.minSegmentLength) {
             return true;
         }
 
