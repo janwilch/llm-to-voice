@@ -10,6 +10,7 @@ Built on [llama.cpp](https://github.com/ggml-org/llama.cpp) (Qwen3 LLM) and [qwe
 - **Voice design:** describe the speaker in plain language ("a mature woman with a warm voice…") and fix it with a seed.
 - **Voice cloning:** clone a speaker from a WAV sample and its transcript.
 - **Speakable segments:** the segmenter drops `<think>` blocks and emoji, splits on sentence ends (aware of abbreviations, initials, numbers and list markers) and merges short sentences for more natural TTS.
+- **Text-only tags:** `{{name}}` tags in the LLM output are returned as text but never spoken, e.g. to trigger animations.
 - **One library, one ggml:** llama.cpp and qwentts.cpp are linked statically into `llmvoice` (`llmvoice.so` / `.dll` / `.dylib`), which exports only the `llmvoice*` C functions.
 - **Cancellable:** `llmvoiceCancel` stops every stage, e.g. when the user interrupts.
 
@@ -112,7 +113,7 @@ llmvoiceSubmitPipeline(prompt):  // also SubmitLlm (LLM [+ segmenter]) and Submi
   SEGMENTER THREAD:  llmTokenQueue -> cleaned segments (w/o <think>) -> segmentsToTtsQueue
   TTS THREAD:        for each segment:
                        segmentsOutQueue.push(segment, pcmOut.totalWritten)
-                       ITtsBackend.synthesizeToBuffer(segment, pcmOut)  // ring buffer
+                       ITtsBackend.synthesizeToBuffer(segment w/o {{tags}}, pcmOut)  // ring buffer
 
 llmvoiceCancel:    cancel backends, close queues, join threads
 llmvoicePollText:  RETURN bytes from segmentsOutQueue, once pcmOut.totalRead > the segment's start

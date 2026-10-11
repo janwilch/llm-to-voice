@@ -1,5 +1,5 @@
 // Pins the segmenter's behaviour: UTF-8 reassembly, <think> filtering, sentence
-// splitting and coalescing.
+// splitting, coalescing and {{tag}} handling.
 
 #include "../src/segmenter/Segmenter.hpp"
 #include "../src/threading/BlockingQueue.hpp"
@@ -241,6 +241,73 @@ TEST_CASE("think filtering", "[segmenter][think]") {
 TEST_CASE("the result is independent of chunk size", "[segmenter][think]") {
     const std::string text = "Before. <think>hidden</think> After the block. ";
     CHECK(runByBytes(text, splitOnly) == run({text}, splitOnly));
+}
+
+TEST_CASE("tags stay in the segments", "[segmenter][tags]") {
+    auto [name, pieces, expected] = GENERATE(table<std::string_view, Segments, Segments>({
+        {"a tag passes through intact",
+         {"Well {{smile}} hello there. Bye. "},
+         {"Well {{smile}} hello there.", "Bye."}},
+
+        {"a tag split across pieces passes through intact",
+         {"Well {", "{smi", "le}", "} hello there. "},
+         {"Well {{smile}} hello there."}},
+
+        {"the period goes after a trailing tag when the spoken text lacks one",
+         {"I am happy {{smile}}\n"},
+         {"I am happy {{smile}}."}},
+
+        {"a trailing tag after punctuation gets no period",
+         {"I am happy! {{smile}}\n"},
+         {"I am happy!", "{{smile}}"}},
+
+        {"a tag-only segment gets no period",
+         {"Hello there.\n{{wave}} {{smile}}"},
+         {"Hello there.", "{{wave}} {{smile}}"}},
+
+        {"something that merely looks like a tag is punctuated as text",
+         {"Fill in {{your name}}\n"},
+         {"Fill in {{your name}}."}},
+    }));
+
+    INFO(name);
+    CAPTURE(pieces);
+    CHECK(run(pieces, splitOnly) == expected);
+}
+
+TEST_CASE("tags pass through independent of chunk size", "[segmenter][tags]") {
+    const std::string text = "Well {{smile}} hello there. {{wave}}\nBye {{nod_2}}";
+    CHECK(runByBytes(text, splitOnly) == run({text}, splitOnly));
+}
+
+TEST_CASE("tags are stripped for the TTS", "[tags]") {
+    auto [text, expected] = GENERATE(table<std::string_view, std::string_view>({
+        {"Well {{smile}} hello there.", "Well hello there."},
+        {"I am happy {{smile}}.", "I am happy."},
+        {"I am happy. {{smile}}", "I am happy."},
+        {"{{smile}} Hello there.", "Hello there."},
+        {"Hello there. {{wave}} Next one.", "Hello there. Next one."},
+        {"One {{a}}{{b_2}} two {{C}}, three.", "One two, three."},
+        {"{{wave}} {{smile}}", ""},
+        {"No tags here.", "No tags here."},
+        // not tags
+        {"An {{}} empty one.", "An {{}} empty one."},
+        {"Fill in {{your name}}.", "Fill in {{your name}}."},
+        {"A {{kebab-case}} one.", "A {{kebab-case}} one."},
+        {"A {single} brace.", "A {single} brace."},
+        {"Cut off {{abc", "Cut off {{abc"},
+    }));
+
+    CAPTURE(text);
+    CHECK(stripTags(text) == expected);
+}
+
+TEST_CASE("only text with something to speak is speakable", "[tags]") {
+    CHECK(hasSpeakableText("Hi."));
+    CHECK(hasSpeakableText("\xE2\x80\xA6 \xC3\xA9"));
+    CHECK_FALSE(hasSpeakableText(""));
+    CHECK_FALSE(hasSpeakableText(" . "));
+    CHECK_FALSE(hasSpeakableText("?!"));
 }
 
 TEST_CASE("a 4-byte character split across pieces is reassembled", "[segmenter][utf8]") {

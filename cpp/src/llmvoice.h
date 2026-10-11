@@ -66,6 +66,7 @@ LLMVOICE_API void llmvoiceSetSegmenterConfig(LlmvoiceHandle*, size_t minSentence
 /// @brief Submit a prompt to run through the whole pipeline (LLM -> segmenter -> TTS).
 /// Both `pollText` and `pollPcm` must be polled: if DEFAULT_QUEUE_CAPA segments of text are unread, TTS stalls until `pollText` is called.
 /// Each segment's text is only returned by `pollText` once `pollPcm` has returned the start of its audio, so text appears as its audio starts.
+/// Tags of the form `{{name}}` (letters, digits, underscores) in the LLM output are returned by `pollText` but never spoken.
 /// @return 0 on success, non-0 otherwise.
 LLMVOICE_API int llmvoiceSubmitPipeline(LlmvoiceHandle*, const char* promptUtf8, bool noThink, int maxTokens);
 

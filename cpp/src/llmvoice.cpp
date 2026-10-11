@@ -298,6 +298,14 @@ int llmvoiceSubmitPipeline(LlmvoiceHandle* handle, const char *promptUtf8, const
                             return; // closed = cancelled
                         }
 
+                        // {{tags}} are for whoever polls the text, not for the voice
+                        if (next->contains("{{")) {
+                            next = stripTags(next.value());
+                            if (!hasSpeakableText(next.value())) {
+                                continue;
+                            }
+                        }
+
                         handle->ttsBackend->synthesizeToBuffer(next.value(), session->pcmOut);
                     }
                 }

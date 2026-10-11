@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../threading/BlockingQueue.hpp"
+#include "Tags.hpp"
 
 #include <algorithm>
 #include <array>
@@ -334,6 +335,16 @@ class Segmenter {
         return !text.empty() && punctuation.contains(text.back());
     }
 
+    /// @brief Whether `text` needs a period appended to be spoken as a sentence. Trailing tags are not spoken, so they are looked past; a segment of nothing but tags needs none.
+    static bool needsPeriod(const std::string_view text) {
+        if (!text.ends_with("}}")) {
+            return !endsWithPunctuation(text);
+        }
+
+        const std::string_view spoken = withoutTrailingTags(text);
+        return !spoken.empty() && !endsWithPunctuation(spoken);
+    }
+
     /// @brief Pushes sentences at least `coalesceMinChars` long.
     /// @return `false` if the consumer closed the queue.
     bool pushCoalesced(const std::string_view sentence, BlockingQueue<std::string>& segmentsOutQueue, const SegmenterConfig& config) {
@@ -377,7 +388,7 @@ class Segmenter {
             }
 
             // Make sure sentences always end with punctuation
-            if (!endsWithPunctuation(speakable)) {
+            if (needsPeriod(speakable)) {
                 speakable += '.';
             }
 
@@ -416,7 +427,7 @@ class Segmenter {
 
             _pending += tail;
 
-            if (!endsWithPunctuation(_pending)) {
+            if (needsPeriod(_pending)) {
                 _pending += '.';
             }
         }
