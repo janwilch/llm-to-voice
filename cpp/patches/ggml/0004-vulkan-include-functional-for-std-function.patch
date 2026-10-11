@@ -1,0 +1,12 @@
+diff --git a/src/ggml-vulkan/ggml-vulkan.cpp b/src/ggml-vulkan/ggml-vulkan.cpp
+index b28fdc9bb..56b361ab1 100644
+--- a/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -65,6 +65,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
+ #include <shared_mutex>
+ #include <mutex>
+ #include <future>
++#include <functional> // std::function, not pulled in transitively by libc++ 23
+ #include <condition_variable>
+ #include <thread>
+ 

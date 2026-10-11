@@ -41,7 +41,7 @@ FetchContent_MakeAvailable(CLI11)
 # on top of upstream (patches/ggml/0001, 0002). llama.cpp is where ggml
 # development happens, so its copy is the newest; the fork is upstream + those
 # two commits and nothing else, verified against upstream's history rather than
-# by diff. patches/ggml/0003 is our own clang build fix.
+# by diff. patches/ggml/0003 and 0004 are our own clang build fixes.
 
 # Static, position-independent: everything folds into one library for Unity,
 # so there is no separate ggml.dll for another native plugin to clash with, and
